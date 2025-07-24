@@ -597,4 +597,8 @@ app.get('/assets/ibrahim.pdf', (req, res) => {
     res.download(path.join(__dirname, 'public/assets/ibrahim.pdf'));
 });
 
+app.get('/', (req, res) => {
+    res.json({ message: 'Welcome to Ibrahim Al-Asfar\'s Portfolio Backend API' });
+});
+
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
