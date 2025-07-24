@@ -36,8 +36,6 @@
         "GITHUB_CLIENT_SECRET": "@github_client_secret",
         "EMAIL_USER": "@email_user",
         "EMAIL_PASS": "@email_pass",
-        "SMTP_HOST": "@smtp_host",
-        "SMTP_PORT": "@smtp_port",
         "BASE_URL": "@base_url",
         "HUGGING_FACE_TOKEN": "@hugging_face_token",
         "CLOUDINARY_CLOUD_NAME": "@cloudinary_cloud_name",
