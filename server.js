@@ -11,6 +11,7 @@ const nodemailer = require('nodemailer');
 const axios = require('axios');
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const cloudinary = require('cloudinary').v2;
+const multer = require('multer');
 require('dotenv').config();
 
 const app = express();
