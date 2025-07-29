@@ -49,7 +49,6 @@ const upload = multer({
     }
 });
 
-
 const logger = winston.createLogger({
     level: 'info',
     format: winston.format.combine(
@@ -131,29 +130,30 @@ const userSchema = new mongoose.Schema({
     otpExpires: Date,
     refreshTokens: [{ token: String, createdAt: { type: Date, default: Date.now } }],
     notifications: [{ type: String }],
-profile: {
-    nickname: { type: String, unique: true, sparse: true },
-    avatar: String,
-    jobTitle: String,
-    bio: String,
-    phone: { type: String, default: '' },
-    socialLinks: {
-        linkedin: { type: String, default: '' },
-        behance: { type: String, default: '' },
-        github: { type: String, default: '' },
-        whatsapp: { type: String, default: '' }
-    },
-    education: [{ institution: String, degree: String, year: String }],
-    experience: [{ company: String, role: String, duration: String }],
-    certificates: [{ name: String, issuer: String, year: String }],
-    skills: [{ name: String, percentage: Number }],
-    projects: [{ title: String, description: String, image: String, links: [{ option: String, value: String }] }],
-    interests: [String],
-    isPublic: { type: Boolean, default: true },
-    customFields: [{ key: String, value: String }],
-    avatarDisplayType: { type: String, enum: ['svg', 'normal'], default: 'normal' },
-    svgColor: { type: String, default: '#000000' }
-}
+    profile: {
+        nickname: { type: String, unique: true, sparse: true },
+        avatar: String,
+        jobTitle: String,
+        bio: String,
+        phone: { type: String, default: '' },
+        socialLinks: {
+            linkedin: { type: String, default: '' },
+            behance: { type: String, default: '' },
+            github: { type: String, default: '' },
+            whatsapp: { type: String, default: '' }
+        },
+        education: [{ institution: String, degree: String, year: String }],
+        experience: [{ company: String, role: String, duration: String }],
+        certificates: [{ name: String, issuer: String, year: String }],
+        skills: [{ name: String, percentage: Number }],
+        projects: [{ title: String, description: String, image: String, links: [{ option: String, value: String }] }],
+        interests: [String],
+        isPublic: { type: Boolean, default: true },
+        customFields: [{ key: String, value: String }],
+        avatarDisplayType: { type: String, enum: ['svg', 'normal'], default: 'normal' },
+        svgColor: { type: String, default: '#000000' },
+        portfolioName: { type: String, default: 'Portfolio' }
+    }
 });
 const User = mongoose.model('User', userSchema);
 
@@ -220,9 +220,6 @@ passport.use(new FacebookStrategy({
     return done(null, user);
 }));
 
-
-
-
 app.get('/auth/facebook/callback', passport.authenticate('facebook', { session: false }), (req, res) => {
     try {
         const token = jwt.sign({ userId: req.user._id, isAdmin: req.user.isAdmin }, JWT_SECRET, { expiresIn: '1h' });
@@ -260,7 +257,6 @@ app.get('/auth/github/callback', passport.authenticate('github', { session: fals
         res.redirect(`${process.env.BASE_URL}/login.html?error=${encodeURIComponent('GitHub authentication failed')}`);
     }
 });
-
 
 app.use((err, req, res, next) => {
     console.error('Unhandled error:', err.stack);
@@ -315,11 +311,11 @@ function authenticateToken(req, res, next) {
                 if (!refreshToken) return res.status(401).json({ error: 'Refresh token is required' });
                 try {
                     const decoded = jwt.verify(refreshToken, JWT_SECRET);
-                    const dbUser = await User.findOne({ _id: decoded.userId, refreshToken });
+                    const dbUser = await User.findOne({ _id: decoded.userId, 'refreshTokens.token': refreshToken });
                     if (!dbUser) return res.status(403).json({ error: 'Invalid refresh token' });
                     const newToken = jwt.sign({ userId: dbUser._id, isAdmin: dbUser.isAdmin }, JWT_SECRET, { expiresIn: '1h' });
                     req.user = { userId: dbUser._id, isAdmin: dbUser.isAdmin };
-                    res.setHeader('X-New-Token', newToken); // إرسال التوكن الجديد في الرد
+                    res.setHeader('X-New-Token', newToken);
                     next();
                 } catch (refreshError) {
                     return res.status(403).json({ error: 'Failed to refresh token' });
@@ -373,8 +369,6 @@ app.post('/api/upload', authenticateToken, upload.single('file'), async (req, re
     }
 });
 
-
-
 app.post('/api/login/otp/verify', async (req, res) => {
     const { email, otp } = req.body;
     try {
@@ -396,12 +390,19 @@ app.get('/api/profile/me', authenticateToken, async (req, res) => {
     try {
         const user = await User.findById(req.user.userId);
         if (!user) return res.status(404).json({ error: 'User not found' });
+        let hasTransparency = false;
+        if (user.profile.avatar) {
+            const image = sharp(user.profile.avatar);
+            const metadata = await image.metadata();
+            hasTransparency = metadata.hasAlpha || false;
+        }
         res.json({
             username: user.username,
             profile: {
                 ...user.profile,
                 customFields: user.profile.customFields || []
-            }
+            },
+            hasTransparency
         });
     } catch (error) {
         logger.error(`Error fetching profile for user ${req.user.userId}: ${error.message}`);
@@ -548,7 +549,6 @@ app.post('/api/login', async (req, res) => {
             return res.status(401).json({ error: 'Invalid credentials' });
         }
         if (user.isAdmin) {
-            // تخطي OTP للإداريين
             const token = jwt.sign({ userId: user._id, isAdmin: user.isAdmin }, JWT_SECRET, { expiresIn: '1h' });
             const refreshToken = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: '7d' });
             user.refreshTokens.push({ token: refreshToken });
@@ -556,7 +556,6 @@ app.post('/api/login', async (req, res) => {
             console.log(`Admin login: ${email} - Token issued without OTP`);
             return res.json({ token, refreshToken });
         }
-        // للمستخدمين العاديين: إرسال OTP
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
         user.otp = otp;
         user.otpExpires = Date.now() + 10 * 60 * 1000;
@@ -620,9 +619,9 @@ app.post('/api/register', async (req, res) => {
         const hashedPassword = await bcrypt.hash(password, 10);
         const user = await User.create({ username, email, password: hashedPassword });
         const token = jwt.sign({ userId: user._id, isAdmin: user.isAdmin }, JWT_SECRET, { expiresIn: '1h' });
-        user.refreshToken = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: '7d' });
+        user.refreshTokens.push({ token: jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: '7d' }) });
         await user.save();
-        res.status(201).json({ token, refreshToken: user.refreshToken });
+        res.status(201).json({ token, refreshToken: user.refreshTokens[0].token });
     } catch (error) {
         console.error('Registration error:', error);
         res.status(500).json({ error: 'Server error during registration' });
@@ -758,21 +757,30 @@ app.delete('/api/skills/:skillId', authenticateToken, async (req, res) => {
     res.sendStatus(204);
 });
 
-// جديد: إدارة الملف الشخصي
 app.get('/api/profile/:nickname', async (req, res) => {
-    try {
-        const user = await User.findOne({ 'profile.nickname': req.params.nickname });
-        if (!user) return res.status(404).json({ error: 'User not found' });
-        if (!user.profile.isPublic && !req.user) {
-            return res.status(403).json({ error: 'Profile is private. Please login to view.', loginRequired: true });
+    const { nickname } = req.params;
+    const user = await User.findOne({ nickname });
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    res.json({
+        username: user.username,
+        profile: {
+            nickname: user.profile.nickname,
+            portfolioName: user.profile.portfolioName,
+            avatar: user.profile.avatar,
+            avatarDisplayType: user.profile.avatarDisplayType,
+            svgColor: user.profile.svgColor,
+            jobTitle: user.profile.jobTitle,
+            bio: user.profile.bio,
+            phone: user.profile.phone,
+            socialLinks: user.profile.socialLinks,
+            education: user.profile.education,
+            experience: user.profile.experience,
+            certificates: user.profile.certificates,
+            interests: user.profile.interests,
+            skills: user.profile.skills,
+            projects: user.profile.projects
         }
-        res.json({
-            username: user.username,
-            profile: user.profile
-        });
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to fetch profile: ' + error.message });
-    }
+    });
 });
 
 app.put('/api/profile', authenticateToken, upload.fields([
@@ -780,7 +788,7 @@ app.put('/api/profile', authenticateToken, upload.fields([
     { name: 'projectImages', maxCount: 10 }
 ]), async (req, res) => {
     try {
-        const { nickname, jobTitle, bio, education, experience, certificates, skills, projects, interests, isPublic ,avatarDisplayType , svgColor } = req.body;
+        const { nickname, jobTitle, bio, phone, socialLinks, education, experience, certificates, skills, projects, interests, isPublic, avatarDisplayType, svgColor } = req.body;
         const user = await User.findById(req.user.userId);
         if (!user) return res.status(404).json({ error: 'User not found' });
 
@@ -793,6 +801,23 @@ app.put('/api/profile', authenticateToken, upload.fields([
             }
         };
 
+        const isValidUrl = (url) => {
+            if (!url) return true;
+            try {
+                new URL(url);
+                return true;
+            } catch {
+                return false;
+            }
+        };
+
+        const parsedSocialLinks = parseJSON(socialLinks, user.profile.socialLinks);
+        for (const [key, url] of Object.entries(parsedSocialLinks)) {
+            if (url && !isValidUrl(url)) {
+                return res.status(400).json({ error: `Invalid ${key} URL` });
+            }
+        }
+
         const parsedEducation = parseJSON(education, user.profile.education);
         const parsedExperience = parseJSON(experience, user.profile.experience);
         const parsedCertificates = parseJSON(certificates, user.profile.certificates);
@@ -802,50 +827,45 @@ app.put('/api/profile', authenticateToken, upload.fields([
         if (req.files && req.files.projectImages) {
             parsedProjects = parsedProjects.map((project, index) => ({
                 ...project,
-                image: req.files[`projectImages[${index}]`] ? req.files[`projectImages[${index}]`][0].path : project.image
+                image: req.files.projectImages && req.files.projectImages[index] ? req.files.projectImages[index].path : project.image
             }));
         }
 
-user.profile = {
-    nickname: nickname || user.profile.nickname,
-    avatar: req.files && req.files.avatar ? req.files.avatar[0].path : user.profile.avatar,
-    jobTitle: jobTitle || user.profile.jobTitle,
-    bio: bio || user.profile.bio,
-    phone: phone || user.profile.phone,
-    socialLinks: {
-        linkedin: socialLinks?.linkedin || user.profile.socialLinks.linkedin,
-        behance: socialLinks?.behance || user.profile.socialLinks.behance,
-        github: socialLinks?.github || user.profile.socialLinks.github,
-        whatsapp: socialLinks?.whatsapp || user.profile.socialLinks.whatsapp
-    },
-    education: parsedEducation,
-    experience: parsedExperience,
-    certificates: parsedCertificates,
-    skills: parsedSkills,
-    projects: parsedProjects,
-    interests: parseJSON(interests, user.profile.interests),
-    isPublic: isPublic !== undefined ? isPublic === 'true' : user.profile.isPublic,
-    avatarDisplayType: avatarDisplayType || user.profile.avatarDisplayType,
-    svgColor: svgColor || user.profile.svgColor
-};
-let hasTransparency = false;
-if (req.files && req.files.avatar) {
-    const imageBuffer = req.files.avatar[0].buffer;
-    const image = sharp(imageBuffer);
-    const metadata = await image.metadata();
-    hasTransparency = metadata.hasAlpha || false;
-    user.profile.avatar = req.files.avatar[0].path;
-}
+        let hasTransparency = false;
+        if (req.files && req.files.avatar) {
+            const imageBuffer = req.files.avatar[0].buffer;
+            const image = sharp(imageBuffer);
+            const metadata = await image.metadata();
+            hasTransparency = metadata.hasAlpha || false;
+            user.profile.avatar = req.files.avatar[0].path;
+        }
+
+        user.profile = {
+            nickname: nickname || user.profile.nickname,
+            avatar: user.profile.avatar,
+            jobTitle: jobTitle || user.profile.jobTitle,
+            bio: bio || user.profile.bio,
+            phone: phone || user.profile.phone,
+            socialLinks: parsedSocialLinks,
+            education: parsedEducation,
+            experience: parsedExperience,
+            certificates: parsedCertificates,
+            skills: parsedSkills,
+            projects: parsedProjects,
+            interests: parseJSON(interests, user.profile.interests),
+            isPublic: isPublic !== undefined ? isPublic === 'true' : user.profile.isPublic,
+            avatarDisplayType: avatarDisplayType || user.profile.avatarDisplayType,
+            svgColor: svgColor || user.profile.svgColor,
+            customFields: parseJSON(req.body.customFields, user.profile.customFields || [])
+        };
 
         await user.save();
         logger.info(`Profile updated for user ${req.user.userId}`);
-        res.json({ message: 'Profile updated successfully', profile: user.profile });
+        res.json({ success: true, message: 'Profile updated successfully', profile: user.profile, hasTransparency });
     } catch (error) {
         logger.error(`Error updating profile for user ${req.user.userId}: ${error.message}`);
         res.status(500).json({ error: `Failed to update profile: ${error.message}` });
     }
-
-    res.json({ success: true, profile: user.profile, hasTransparency });
 });
 
 app.get('/api/user-interactions', authenticateToken, async (req, res) => {
@@ -891,35 +911,35 @@ app.get('/api/profile/pdf/:nickname', async (req, res) => {
         doc.setFontSize(12);
         doc.text(`Job Title: ${user.profile.jobTitle || 'Not specified'}`, 10, 30);
         doc.text(`Bio: ${user.profile.bio || 'Not specified'}`, 10, 40);
-doc.text('Education:', 10, 110);
         doc.text(`Phone: ${user.profile.phone || 'Not specified'}`, 10, 50);
-doc.text('Social Links:', 10, 60);
-doc.text(`LinkedIn: ${user.profile.socialLinks.linkedin || 'Not specified'}`, 10, 70);
-doc.text(`Behance: ${user.profile.socialLinks.behance || 'Not specified'}`, 10, 80);
-doc.text(`GitHub: ${user.profile.socialLinks.github || 'Not specified'}`, 10, 90);
-doc.text(`WhatsApp: ${user.profile.socialLinks.whatsapp || 'Not specified'}`, 10, 100);
+        doc.text('Social Links:', 10, 60);
+        doc.text(`LinkedIn: ${user.profile.socialLinks.linkedin || 'Not specified'}`, 10, 70);
+        doc.text(`Behance: ${user.profile.socialLinks.behance || 'Not specified'}`, 10, 80);
+        doc.text(`GitHub: ${user.profile.socialLinks.github || 'Not specified'}`, 10, 90);
+        doc.text(`WhatsApp: ${user.profile.socialLinks.whatsapp || 'Not specified'}`, 10, 100);
+        doc.text('Education:', 10, 110);
         user.profile.education.forEach((edu, i) => {
-            doc.text(`${edu.degree} at ${edu.institution} (${edu.year})`, 10, 60 + i * 10);
+            doc.text(`${edu.degree} at ${edu.institution} (${edu.year})`, 10, 120 + i * 10);
         });
-        doc.text('Experience:', 10, 60 + user.profile.education.length * 10);
+        doc.text('Experience:', 10, 120 + user.profile.education.length * 10);
         user.profile.experience.forEach((exp, i) => {
-            doc.text(`${exp.role} at ${exp.company} (${exp.duration})`, 10, 70 + user.profile.education.length * 10 + i * 10);
+            doc.text(`${exp.role} at ${exp.company} (${exp.duration})`, 10, 130 + user.profile.education.length * 10 + i * 10);
         });
-        doc.text('Certificates:', 10, 70 + user.profile.education.length * 10 + user.profile.experience.length * 10);
+        doc.text('Certificates:', 10, 130 + user.profile.education.length * 10 + user.profile.experience.length * 10);
         user.profile.certificates.forEach((cert, i) => {
-            doc.text(`${cert.name} by ${cert.issuer} (${cert.year})`, 10, 80 + user.profile.education.length * 10 + user.profile.experience.length * 10 + i * 10);
+            doc.text(`${cert.name} by ${cert.issuer} (${cert.year})`, 10, 140 + user.profile.education.length * 10 + user.profile.experience.length * 10 + i * 10);
         });
-        doc.text('Skills:', 10, 80 + user.profile.education.length * 10 + user.profile.experience.length * 10 + user.profile.certificates.length * 10);
+        doc.text('Skills:', 10, 140 + user.profile.education.length * 10 + user.profile.experience.length * 10 + user.profile.certificates.length * 10);
         user.profile.skills.forEach((skill, i) => {
-            doc.text(`${skill.name} (${skill.percentage}%)`, 10, 90 + user.profile.education.length * 10 + user.profile.experience.length * 10 + user.profile.certificates.length * 10 + i * 10);
+            doc.text(`${skill.name} (${skill.percentage}%)`, 10, 150 + user.profile.education.length * 10 + user.profile.experience.length * 10 + user.profile.certificates.length * 10 + i * 10);
         });
-        doc.text('Projects:', 10, 90 + user.profile.education.length * 10 + user.profile.experience.length * 10 + user.profile.certificates.length * 10 + user.profile.skills.length * 10);
+        doc.text('Projects:', 10, 150 + user.profile.education.length * 10 + user.profile.experience.length * 10 + user.profile.certificates.length * 10 + user.profile.skills.length * 10);
         user.profile.projects.forEach((project, i) => {
-            doc.text(`${project.title}: ${project.description}`, 10, 100 + user.profile.education.length * 10 + user.profile.experience.length * 10 + user.profile.certificates.length * 10 + user.profile.skills.length * 10 + i * 10);
+            doc.text(`${project.title}: ${project.description}`, 10, 160 + user.profile.education.length * 10 + user.profile.experience.length * 10 + user.profile.certificates.length * 10 + user.profile.skills.length * 10 + i * 10);
         });
-        doc.text('Interests:', 10, 100 + user.profile.education.length * 10 + user.profile.experience.length * 10 + user.profile.certificates.length * 10 + user.profile.skills.length * 10 + user.profile.projects.length * 10);
+        doc.text('Interests:', 10, 160 + user.profile.education.length * 10 + user.profile.experience.length * 10 + user.profile.certificates.length * 10 + user.profile.skills.length * 10 + user.profile.projects.length * 10);
         user.profile.interests.forEach((interest, i) => {
-            doc.text(interest, 10, 110 + user.profile.education.length * 10 + user.profile.experience.length * 10 + user.profile.certificates.length * 10 + user.profile.skills.length * 10 + user.profile.projects.length * 10 + i * 10);
+            doc.text(interest, 10, 170 + user.profile.education.length * 10 + user.profile.experience.length * 10 + user.profile.certificates.length * 10 + user.profile.skills.length * 10 + user.profile.projects.length * 10 + i * 10);
         });
 
         res.setHeader('Content-Type', 'application/pdf');
@@ -928,16 +948,8 @@ doc.text(`WhatsApp: ${user.profile.socialLinks.whatsapp || 'Not specified'}`, 10
     } catch (error) {
         res.status(500).json({ error: 'Failed to generate PDF: ' + error.message });
     }
-    let hasTransparency = false;
-if (user.profile.avatar) {
-    const image = sharp(user.profile.avatar);
-    const metadata = await image.metadata();
-    hasTransparency = metadata.hasAlpha || false;
-}
-res.json({ success: true, profile: user.profile, hasTransparency });
 });
 
-// Forgot Password Endpoint
 app.post('/api/forgot-password', async (req, res) => {
     const { email } = req.body;
     try {
@@ -950,7 +962,7 @@ app.post('/api/forgot-password', async (req, res) => {
         }
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
         user.otp = otp;
-        user.otpExpires = Date.now() + 10 * 60 * 1000; // OTP valid for 10 minutes
+        user.otpExpires = Date.now() + 10 * 60 * 1000;
         await user.save();
         try {
             await transporter.sendMail({
@@ -971,7 +983,6 @@ app.post('/api/forgot-password', async (req, res) => {
     }
 });
 
-// Reset Password Endpoint
 app.post('/api/reset-password', async (req, res) => {
     const { email, otp, newPassword } = req.body;
     try {
