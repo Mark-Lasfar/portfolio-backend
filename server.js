@@ -1035,4 +1035,5 @@ app.get('/', (req, res) => {
     res.json({ message: 'Welcome to Ibrahim Al-Asfar\'s Portfolio Backend API' });
 });
 
+// module.exports = app;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
