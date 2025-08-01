@@ -288,7 +288,7 @@ const Conversation = mongoose.model('Conversation', conversationSchema);
 passport.use(new GoogleStrategy({
     clientID: GOOGLE_CLIENT_ID,
     clientSecret: GOOGLE_CLIENT_SECRET,
-    callbackURL: `${process.env.BASE_URL}/auth/callback`
+    callbackURL: `${process.env.BASE_URL}/auth/google/callback`
 }, async (accessToken, refreshToken, profile, done) => {
     try {
         let user = await User.findOne({ googleId: profile.id });
@@ -324,7 +324,7 @@ app.get('/auth/google/callback', passport.authenticate('google', { session: fals
 passport.use(new FacebookStrategy({
     clientID: FACEBOOK_CLIENT_ID,
     clientSecret: FACEBOOK_CLIENT_SECRET,
-    callbackURL: `${process.env.BASE_URL}/auth/callback`,
+    callbackURL: `${process.env.BASE_URL}/auth/facebook/callback`,
     profileFields: ['id', 'emails', 'displayName']
 }, async (accessToken, refreshToken, profile, done) => {
     try {
@@ -361,7 +361,7 @@ app.get('/auth/facebook/callback', passport.authenticate('facebook', { session: 
 passport.use(new GitHubStrategy({
     clientID: GITHUB_CLIENT_ID,
     clientSecret: GITHUB_CLIENT_SECRET,
-    callbackURL: `${process.env.BASE_URL}/auth/callback`
+    callbackURL: `${process.env.BASE_URL}/auth/github/callback`
 }, async (accessToken, refreshToken, profile, done) => {
     try {
         let user = await User.findOne({ githubId: profile.id });
