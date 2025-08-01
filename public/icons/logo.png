@@ -1,41 +1,31 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
-  <!-- قناع الهلال -->
   <defs>
     <mask id="crescent-mask">
       <rect width="100%" height="100%" fill="white"/>
-      <!-- نقلنا الدائرة للداخل لتجعل الهلال أرفع -->
-      <circle cx="120" cy="100" r="60" fill="black"/>
+      <circle cx="110" cy="100" r="50" fill="black"/>
     </mask>
   </defs>
 
-  <!-- مجموعة الهلال مع تدوير للأعلى -->
   <g transform="rotate(-30 100 100)">
     <circle cx="100" cy="100" r="60" fill="black" mask="url(#crescent-mask)" />
   </g>
 
-  <!-- نص "asfar" داخل الهلال -->
+  <style>
+    .letter { opacity: 0; animation: fadeIn 0.5s forwards; }
+    .letter:nth-child(1) { animation-delay: 0s; }
+    .letter:nth-child(2) { animation-delay: 0.3s; }
+    .letter:nth-child(3) { animation-delay: 0.6s; }
+    .letter:nth-child(4) { animation-delay: 0.9s; }
+    .letter:nth-child(5) { animation-delay: 1.2s; }
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+  </style>
   <g font-family="Arial" font-size="36" text-anchor="middle">
-    <text y="112">
-      <tspan x="90" fill="#003366">
-        <animate attributeName="opacity" from="0" to="1" dur="0.5s" begin="0s" fill="freeze"/>
-        a
-      </tspan>
-      <tspan x="110" fill="#004080">
-        <animate attributeName="opacity" from="0" to="1" dur="0.5s" begin="0.3s" fill="freeze"/>
-        s
-      </tspan>
-      <tspan x="130" fill="#005599">
-        <animate attributeName="opacity" from="0" to="1" dur="0.5s" begin="0.6s" fill="freeze"/>
-        f
-      </tspan>
-      <tspan x="150" fill="#0066b2">
-        <animate attributeName="opacity" from="0" to="1" dur="0.5s" begin="0.9s" fill="freeze"/>
-        a
-      </tspan>
-      <tspan x="170" fill="#007acc">
-        <animate attributeName="opacity" from="0" to="1" dur="0.5s" begin="1.2s" fill="freeze"/>
-        r
-      </tspan>
+    <text y="100">
+      <tspan x="80" fill="#003366" class="letter">a</tspan>
+      <tspan x="95" fill="#004080" class="letter">s</tspan>
+      <tspan x="110" fill="#005599" class="letter">f</tspan>
+      <tspan x="125" fill="#0066b2" class="letter">a</tspan>
+      <tspan x="140" fill="#007acc" class="letter">r</tspan>
     </text>
   </g>
 </svg>
