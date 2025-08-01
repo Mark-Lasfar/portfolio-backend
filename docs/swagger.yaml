@@ -1,0 +1,1474 @@
+openapi: 3.0.0
+info:
+  title: Portfolio API
+  version: 1.0.0
+  description: API for Ibrahim Al-Asfar's portfolio website, supporting user authentication, project management, profile handling, and more.
+servers:
+  - url: https://portfolio-backend-beta-two.vercel.app
+    description: Production server
+  - url: http://localhost:3000
+    description: Local development server
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    Project:
+      type: object
+      properties:
+        _id:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        image:
+          type: string
+        rating:
+          type: string
+        stars:
+          type: number
+        links:
+          type: array
+          items:
+            type: object
+            properties:
+              option:
+                type: string
+              value:
+                type: string
+              isPrivate:
+                type: boolean
+    Comment:
+      type: object
+      properties:
+        _id:
+          type: string
+        projectId:
+          type: string
+        userId:
+          type: object
+          properties:
+            username:
+              type: string
+            email:
+              type: string
+        rating:
+          type: number
+        text:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        replies:
+          type: array
+          items:
+            type: object
+            properties:
+              text:
+                type: string
+              timestamp:
+                type: string
+                format: date-time
+    Skill:
+      type: object
+      properties:
+        _id:
+          type: string
+        name:
+          type: string
+        icon:
+          type: string
+        percentage:
+          type: number
+    UserProfile:
+      type: object
+      properties:
+        username:
+          type: string
+        profile:
+          type: object
+          properties:
+            nickname:
+              type: string
+            portfolioName:
+              type: string
+            avatar:
+              type: string
+            avatarDisplayType:
+              type: string
+              enum: ['svg', 'normal']
+            svgColor:
+              type: string
+            jobTitle:
+              type: string
+            bio:
+              type: string
+            phone:
+              type: string
+            socialLinks:
+              type: object
+              properties:
+                linkedin:
+                  type: string
+                behance:
+                  type: string
+                github:
+                  type: string
+                whatsapp:
+                  type: string
+            education:
+              type: array
+              items:
+                type: object
+                properties:
+                  institution:
+                    type: string
+                  degree:
+                    type: string
+                  year:
+                    type: string
+            experience:
+              type: array
+              items:
+                type: object
+                properties:
+                  company:
+                    type: string
+                  role:
+                    type: string
+                  duration:
+                    type: string
+            certificates:
+              type: array
+              items:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  issuer:
+                    type: string
+                  year:
+                    type: string
+            skills:
+              type: array
+              items:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  percentage:
+                    type: number
+            projects:
+              type: array
+              items:
+                type: object
+                properties:
+                  title:
+                    type: string
+                  description:
+                    type: string
+                  image:
+                    type: string
+                  links:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        option:
+                          type: string
+                        value:
+                          type: string
+            interests:
+              type: array
+              items:
+                type: string
+            customFields:
+              type: array
+              items:
+                type: object
+                properties:
+                  key:
+                    type: string
+                  value:
+                    type: string
+    Notification:
+      type: object
+      properties:
+        message:
+          type: string
+paths:
+  /api/login:
+    post:
+      summary: Log in a user
+      description: Authenticates a user with email and password. Returns tokens for admin users or sends OTP for non-admin users.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                  example: user@example.com
+                password:
+                  type: string
+                  example: password123
+              required:
+                - email
+                - password
+      responses:
+        '200':
+          description: OTP sent or tokens returned
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    properties:
+                      message:
+                        type: string
+                        example: OTP sent to your email
+                  - type: object
+                    properties:
+                      token:
+                        type: string
+                      refreshToken:
+                        type: string
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  errors:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        msg:
+                          type: string
+                        param:
+                          type: string
+                        location:
+                          type: string
+        '401':
+          description: Invalid credentials
+        '500':
+          description: Server error
+  /api/login/verify-otp:
+    post:
+      summary: Verify OTP for login
+      description: Verifies the OTP sent to the user's email to complete login.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                  example: user@example.com
+                otp:
+                  type: string
+                  example: "123456"
+              required:
+                - email
+                - otp
+      responses:
+        '200':
+          description: Login successful, returns tokens
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token:
+                    type: string
+                  refreshToken:
+                    type: string
+        '400':
+          description: Invalid or expired OTP
+        '500':
+          description: Server error
+  /api/register:
+    post:
+      summary: Register a new user
+      description: Creates a new user account with username, email, and password.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username:
+                  type: string
+                  example: testuser
+                email:
+                  type: string
+                  example: user@example.com
+                password:
+                  type: string
+                  example: password123
+              required:
+                - email
+                - password
+      responses:
+        '201':
+          description: User registered successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token:
+                    type: string
+                  refreshToken:
+                    type: string
+        '400':
+          description: Invalid input or email already exists
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  errors:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        msg:
+                          type: string
+                        param:
+                          type: string
+                        location:
+                          type: string
+        '500':
+          description: Server error
+  /api/verify-token:
+    get:
+      summary: Verify JWT token
+      description: Verifies the provided JWT token and returns user information.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Token is valid
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid:
+                    type: boolean
+                  userId:
+                    type: string
+                  isAdmin:
+                    type: boolean
+                  username:
+                    type: string
+                  profile:
+                    $ref: '#/components/schemas/UserProfile'
+        '401':
+          description: Token is required
+        '403':
+          description: Invalid token
+        '404':
+          description: User not found
+  /api/logout:
+    post:
+      summary: Log out a user
+      description: Invalidates the refresh token and logs out the user.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refreshToken:
+                  type: string
+              required:
+                - refreshToken
+      responses:
+        '200':
+          description: Logged out successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Logged out successfully
+        '404':
+          description: User not found
+        '500':
+          description: Server error
+  /api/upload:
+    post:
+      summary: Upload a file
+      description: Uploads a file (JPEG, PNG, or PDF) to Cloudinary (authenticated users only).
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+              required:
+                - file
+      responses:
+        '200':
+          description: File uploaded successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: File uploaded successfully: <fileUrl>
+        '400':
+          description: No file uploaded or invalid file type
+        '401':
+          description: Authentication required
+  /api/projects:
+    get:
+      summary: Get all projects
+      description: Retrieves a list of all projects.
+      responses:
+        '200':
+          description: List of projects
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Project'
+        '500':
+          description: Server error
+    post:
+      summary: Create a new project
+      description: Creates a new project (admin only).
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                  example: Project Title
+                description:
+                  type: string
+                  example: Project description
+                image:
+                  type: string
+                  example: https://example.com/image.jpg
+                rating:
+                  type: string
+                  example: High
+                stars:
+                  type: number
+                  example: 5
+                links:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      option:
+                        type: string
+                      value:
+                        type: string
+                      isPrivate:
+                        type: boolean
+              required:
+                - title
+                - description
+                - image
+                - rating
+                - stars
+                - links
+      responses:
+        '201':
+          description: Project created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  errors:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        msg:
+                          type: string
+                        param:
+                          type: string
+                        location:
+                          type: string
+        '403':
+          description: Admin access required
+        '500':
+          description: Server error
+  /api/projects/{projectId}:
+    put:
+      summary: Update a project
+      description: Updates an existing project (admin only).
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: projectId
+          required: true
+          schema:
+            type: string
+          description: The ID of the project to update
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                  example: Updated Project Title
+                description:
+                  type: string
+                  example: Updated project description
+                image:
+                  type: string
+                  example: https://example.com/updated-image.jpg
+                rating:
+                  type: string
+                  example: High
+                stars:
+                  type: number
+                  example: 4
+                links:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      option:
+                        type: string
+                      value:
+                        type: string
+                      isPrivate:
+                        type: boolean
+              required:
+                - title
+                - description
+                - image
+                - rating
+                - stars
+                - links
+      responses:
+        '200':
+          description: Project updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  errors:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        msg:
+                          type: string
+                        param:
+                          type: string
+                        location:
+                          type: string
+        '403':
+          description: Admin access required
+        '404':
+          description: Project not found
+        '500':
+          description: Server error
+    delete:
+      summary: Delete a project
+      description: Deletes a project and its associated comments (admin only).
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: projectId
+          required: true
+          schema:
+            type: string
+          description: The ID of the project to delete
+      responses:
+        '204':
+          description: Project deleted
+        '403':
+          description: Admin access required
+        '500':
+          description: Server error
+  /api/comments/{projectId}:
+    get:
+      summary: Get comments for a project
+      description: Retrieves all comments for a specific project.
+      parameters:
+        - in: path
+          name: projectId
+          required: true
+          schema:
+            type: string
+          description: The ID of the project
+      responses:
+        '200':
+          description: List of comments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Comment'
+        '500':
+          description: Server error
+  /api/comments:
+    get:
+      summary: Get all comments
+      description: Retrieves all comments with user and project details (admin only).
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: List of comments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    _id:
+                      type: string
+                    projectId:
+                      type: string
+                    projectTitle:
+                      type: string
+                    userId:
+                      type: object
+                      properties:
+                        username:
+                          type: string
+                        email:
+                          type: string
+                    rating:
+                      type: number
+                    text:
+                      type: string
+                    timestamp:
+                      type: string
+                      format: date-time
+                    replies:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          text:
+                            type: string
+                          timestamp:
+                            type: string
+                            format: date-time
+        '403':
+          description: Admin access required
+        '500':
+          description: Server error
+    post:
+      summary: Add a comment
+      description: Adds a new comment to a project (authenticated users only).
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                projectId:
+                  type: string
+                  example: 507f1f77bcf86cd799439011
+                rating:
+                  type: number
+                  example: 5
+                text:
+                  type: string
+                  example: Great project!
+              required:
+                - projectId
+                - rating
+                - text
+      responses:
+        '201':
+          description: Comment added
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Comment'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  errors:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        msg:
+                          type: string
+                        param:
+                          type: string
+                        location:
+                          type: string
+        '401':
+          description: Authentication required
+        '500':
+          description: Server error
+  /api/comments/{commentId}/reply:
+    post:
+      summary: Reply to a comment
+      description: Adds a reply to an existing comment (admin only).
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: commentId
+          required: true
+          schema:
+            type: string
+          description: The ID of the comment to reply to
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                text:
+                  type: string
+                  example: Thanks for your feedback!
+              required:
+                - text
+      responses:
+        '200':
+          description: Reply added
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Comment'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  errors:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        msg:
+                          type: string
+                        param:
+                          type: string
+                        location:
+                          type: string
+        '403':
+          description: Admin access required
+        '404':
+          description: Comment not found
+        '500':
+          description: Server error
+  /api/comments/{commentId}:
+    delete:
+      summary: Delete a comment
+      description: Deletes a comment (admin only).
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: commentId
+          required: true
+          schema:
+            type: string
+          description: The ID of the comment to delete
+      responses:
+        '204':
+          description: Comment deleted
+        '403':
+          description: Admin access required
+        '500':
+          description: Server error
+  /api/skills:
+    get:
+      summary: Get all skills
+      description: Retrieves a list of all skills.
+      responses:
+        '200':
+          description: List of skills
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Skill'
+        '500':
+          description: Server error
+    post:
+      summary: Create a new skill
+      description: Creates a new skill (admin only).
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  example: JavaScript
+                icon:
+                  type: string
+                  example: https://example.com/icon.png
+                percentage:
+                  type: number
+                  example: 90
+              required:
+                - name
+                - icon
+                - percentage
+      responses:
+        '201':
+          description: Skill created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Skill'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  errors:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        msg:
+                          type: string
+                        param:
+                          type: string
+                        location:
+                          type: string
+        '403':
+          description: Admin access required
+        '500':
+          description: Server error
+  /api/skills/{skillId}:
+    put:
+      summary: Update a skill
+      description: Updates an existing skill (admin only).
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: skillId
+          required: true
+          schema:
+            type: string
+          description: The ID of the skill to update
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  example: Updated JavaScript
+                icon:
+                  type: string
+                  example: https://example.com/updated-icon.png
+                percentage:
+                  type: number
+                  example: 95
+              required:
+                - name
+                - icon
+                - percentage
+      responses:
+        '200':
+          description: Skill updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Skill'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  errors:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        msg:
+                          type: string
+                        param:
+                          type: string
+                        location:
+                          type: string
+        '403':
+          description: Admin access required
+        '404':
+          description: Skill not found
+        '500':
+          description: Server error
+    delete:
+      summary: Delete a skill
+      description: Deletes a skill (admin only).
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: skillId
+          required: true
+          schema:
+            type: string
+          description: The ID of the skill to delete
+      responses:
+        '204':
+          description: Skill deleted
+        '403':
+          description: Admin access required
+        '500':
+          description: Server error
+  /api/profile/{nickname}:
+    get:
+      summary: Get a user's profile
+      description: Retrieves a user's profile by nickname or username.
+      parameters:
+        - in: path
+          name: nickname
+          required: true
+          schema:
+            type: string
+          description: The nickname or username of the user
+      responses:
+        '200':
+          description: User profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+        '404':
+          description: User not found
+  /api/profile:
+    put:
+      summary: Update user profile
+      description: Updates the authenticated user's profile, including optional file uploads for avatar and project images.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                nickname:
+                  type: string
+                  example: johndoe
+                jobTitle:
+                  type: string
+                  example: Full-Stack Developer
+                bio:
+                  type: string
+                  example: Experienced developer with a passion for web technologies
+                phone:
+                  type: string
+                  example: +1234567890
+                socialLinks:
+                  type: string
+                  example: '{"linkedin":"https://linkedin.com/in/johndoe","github":"https://github.com/johndoe"}'
+                education:
+                  type: string
+                  example: '[{"institution":"University","degree":"BSc","year":"2020"}]'
+                experience:
+                  type: string
+                  example: '[{"company":"Tech Corp","role":"Developer","duration":"2020-2022"}]'
+                certificates:
+                  type: string
+                  example: '[{"name":"AWS Certified","issuer":"Amazon","year":"2021"}]'
+                skills:
+                  type: string
+                  example: '[{"name":"JavaScript","percentage":90}]'
+                projects:
+                  type: string
+                  example: '[{"title":"Project X","description":"A web app","image":"https://example.com/image.jpg"}]'
+                interests:
+                  type: string
+                  example: '["coding","gaming"]'
+                isPublic:
+                  type: boolean
+                  example: true
+                avatarDisplayType:
+                  type: string
+                  enum: ['svg', 'normal']
+                  example: normal
+                svgColor:
+                  type: string
+                  example: '#000000'
+                avatar:
+                  type: string
+                  format: binary
+                projectImages:
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+      responses:
+        '200':
+          description: Profile updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                    example: Profile updated successfully
+                  profile:
+                    $ref: '#/components/schemas/UserProfile'
+                  hasTransparency:
+                    type: boolean
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  errors:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        msg:
+                          type: string
+                        param:
+                          type: string
+                        location:
+                          type: string
+        '401':
+          description: Authentication required
+        '404':
+          description: User not found
+        '500':
+          description: Server error
+  /api/profile/pdf/{nickname}:
+    get:
+      summary: Generate a PDF resume
+      description: Generates a PDF resume for a user by nickname, using jsPDF with autoTable for professional formatting. Only accessible for public profiles or authenticated users.
+      parameters:
+        - in: path
+          name: nickname
+          required: true
+          schema:
+            type: string
+          description: The nickname or username of the user
+      responses:
+        '200':
+          description: PDF resume generated
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        '403':
+          description: Profile is private
+        '404':
+          description: User not found
+        '500':
+          description: Server error
+  /api/notifications:
+    get:
+      summary: Get user notifications
+      description: Retrieves all notifications for the authenticated user (admin only).
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: List of notifications
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Notification'
+        '403':
+          description: Admin access required
+        '500':
+          description: Server error
+  /api/user-interactions:
+    get:
+      summary: Get user interactions
+      description: Retrieves all comments made by the authenticated user.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: List of user comments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Comment'
+        '401':
+          description: Authentication required
+        '500':
+          description: Server error
+  /api/users:
+    get:
+      summary: Get all users
+      description: Retrieves a list of all users (admin only).
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: List of users
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    username:
+                      type: string
+                    email:
+                      type: string
+                    profile:
+                      $ref: '#/components/schemas/UserProfile'
+        '403':
+          description: Admin access required
+        '500':
+          description: Server error
+  /api/users/{userId}:
+    delete:
+      summary: Delete a user
+      description: Deletes a user and their comments (admin only).
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: userId
+          required: true
+          schema:
+            type: string
+          description: The ID of the user to delete
+      responses:
+        '204':
+          description: User deleted
+        '403':
+          description: Admin access required
+        '500':
+          description: Server error
+  /api/forgot-password:
+    post:
+      summary: Request password reset
+      description: Sends a password reset OTP to the user's email.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                  example: user@example.com
+              required:
+                - email
+      responses:
+        '200':
+          description: Reset code sent
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Reset code sent to your email
+        '400':
+          description: Email required
+        '404':
+          description: User not found
+        '500':
+          description: Server error
+  /api/reset-password:
+    post:
+      summary: Reset password
+      description: Resets the user's password using the OTP.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                  example: user@example.com
+                otp:
+                  type: string
+                  example: "123456"
+                newPassword:
+                  type: string
+                  example: newpassword123
+              required:
+                - email
+                - otp
+                - newPassword
+      responses:
+        '200':
+          description: Password reset successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Password reset successfully
+        '400':
+          description: Invalid input or OTP
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  errors:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        msg:
+                          type: string
+                        param:
+                          type: string
+                        location:
+                          type: string
+        '500':
+          description: Server error
+  /api/health:
+    get:
+      summary: Check server health
+      description: Checks the health of the server and MongoDB connection.
+      responses:
+        '200':
+          description: Server is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  mongodb:
+                    type: string
+                    example: connected
+                  timestamp:
+                    type: string
+                    format: date-time
+        '500':
+          description: Server error
+  /api/users/search:
+    get:
+      summary: Search users
+      description: Searches for public users by nickname or username.
+      parameters:
+        - in: query
+          name: query
+          required: true
+          schema:
+            type: string
+          description: Search query for nickname or username
+      responses:
+        '200':
+          description: List of matching users
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    username:
+                      type: string
+                    nickname:
+                      type: string
+                    avatar:
+                      type: string
+                    profileUrl:
+                      type: string
+                    portfolioName:
+                      type: string
+        '500':
+          description: Server error
+  /api/conversations/export:
+    get:
+      summary: Export conversations
+      description: Exports all conversations as a CSV file (admin only).
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Conversations exported as CSV
+          content:
+            text/csv:
+              schema:
+                type: string
+                format: binary
+        '403':
+          description: Admin access required
+        '500':
+          description: Server error
+  /api/github-projects:
+    get:
+      summary: Get GitHub projects
+      description: Retrieves the GitHub repositories for the user Mark-Lasfar.
+      responses:
+        '200':
+          description: List of GitHub repositories
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: number
+                    name:
+                      type: string
+                    description:
+                      type: string
+                    html_url:
+                      type: string
+                    created_at:
+                      type: string
+                      format: date-time
+        '500':
+          description: Server error
+  /auth/google:
+    get:
+      summary: Initiate Google OAuth login
+      description: Redirects to Google for OAuth authentication.
+      responses:
+        '302':
+          description: Redirect to Google authentication
+  /auth/facebook:
+    get:
+      summary: Initiate Facebook OAuth login
+      description: Redirects to Facebook for OAuth authentication.
+      responses:
+        '302':
+          description: Redirect to Facebook authentication
+  /auth/github:
+    get:
+      summary: Initiate GitHub OAuth login
+      description: Redirects to GitHub for OAuth authentication.
+      responses:
+        '302':
+          description: Redirect to GitHub authentication
+  /auth/google/callback:
+    get:
+      summary: Google OAuth callback
+      description: Handles the callback from Google OAuth and redirects with tokens.
+      responses:
+        '302':
+          description: Redirect to client with tokens or error
+  /auth/facebook/callback:
+    get:
+      summary: Facebook OAuth callback
+      description: Handles the callback from Facebook OAuth and redirects with tokens.
+      responses:
+        '302':
+          description: Redirect to client with tokens or error
+  /auth/github/callback:
+    get:
+      summary: GitHub OAuth callback
+      description: Handles the callback from GitHub OAuth and redirects with tokens.
+      responses:
+        '302':
+          description: Redirect to client with tokens or error
+  /:
+    get:
+      summary: Welcome message
+      description: Returns a welcome message for the API.
+      responses:
+        '200':
+          description: Welcome message
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Welcome to Ibrahim Al-Asfar's Portfolio Backend API

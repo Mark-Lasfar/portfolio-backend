@@ -23,4 +23,5 @@ build/
 *.swp
 
 # Cloudinary uploads
-uploads/public/
+uploads/
+tmp/
