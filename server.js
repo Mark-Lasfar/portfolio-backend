@@ -155,12 +155,12 @@ const upload = multer({
 
 
 mongoose.connect(process.env.MONGODB_URI)
-    .then(() => logger.info('Connected to MongoDB'))
-    .catch(err => {
-        logger.error('MongoDB connection error:', err);
-        Sentry.captureException(err);
-        process.exit(1); // Exit if MongoDB connection
-    });
+  .then(() => logger.info('Connected to MongoDB'))
+  .catch(err => {
+    logger.error(`MongoDB connection error: ${err.message}`, { stack: err.stack });
+    Sentry.captureException(err);
+    process.exit(1);
+  });
 
 const MONGODB_URI = process.env.MONGODB_URI;
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -1491,21 +1491,24 @@ app.post('/api/reset-password', [
 });
 
 app.get('/api/health', async (req, res) => {
-    try {
-        await mongoose.connection.db.admin().ping();
-        const services = {
-            status: 'ok',
-            mongodb: 'connected',
-            cloudinary: cloudinary.config().cloud_name ? 'configured' : 'not configured',
-            sentry: process.env.SENTRY_DSN ? 'configured' : 'not configured',
-            timestamp: new Date()
-        };
-        res.json(services);
-    } catch (error) {
-        logger.error(`Health check error: ${error.message}`);
-        Sentry.captureException(error);
-        res.status(500).json({ error: 'Server error', details: error.message });
+  try {
+    if (mongoose.connection.readyState !== 1) {
+      throw new Error('MongoDB is not connected');
     }
+    await mongoose.connection.db.admin().ping();
+    const services = {
+      status: 'ok',
+      mongodb: 'connected',
+      cloudinary: cloudinary.config().cloud_name ? 'configured' : 'not configured',
+      sentry: process.env.SENTRY_DSN ? 'configured' : 'not configured',
+      timestamp: new Date()
+    };
+    res.json(services);
+  } catch (error) {
+    logger.error(`Health check error: ${error.message}`);
+    Sentry.captureException(error);
+    res.status(500).json({ error: 'Server error', details: error.message });
+  }
 });
 
 app.get('/api/users/search', async (req, res) => {
