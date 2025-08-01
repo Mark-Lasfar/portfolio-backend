@@ -441,7 +441,7 @@ paths:
                 properties:
                   message:
                     type: string
-                    example: File uploaded successfully: <fileUrl>
+                    example: "File uploaded successfully: <fileUrl>"
         '400':
           description: No file uploaded or invalid file type
         '401':

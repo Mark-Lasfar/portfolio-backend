@@ -24,13 +24,39 @@ const csurf = require('csurf');
 const Sentry = require('@sentry/node');
 const morgan = require('morgan');
 const cookieParser = require('cookie-parser');
+const timeout = require('express-timeout-handler');
+const compression = require('compression');
+const SentryTracing = require('@sentry/tracing');
+const app = express();
+
+const { Handlers } = require('@sentry/node');
+
+const logger = winston.createLogger({
+    level: 'info',
+    format: winston.format.combine(
+        winston.format.timestamp(),
+        winston.format.json()
+    ),
+    transports: [
+        new winston.transports.Console(),
+    ]
+});
+
+
+Sentry.init({
+    dsn: process.env.SENTRY_DSN,
+    tracesSampleRate: 0.0,
+    environment: process.env.NODE_ENV || 'development',
+});
 
 
 
+
+
+app.use(Handlers.requestHandler());
 
 app.use(express.json({ type: ['application/json', 'text/plain'] }));
 app.use(morgan('combined', { stream: { write: message => logger.info(message.trim()) } }));
-// Add CSRF token to responses
 app.use(cookieParser());
 app.use(csurf({ cookie: true }));
 app.use((req, res, next) => {
@@ -38,10 +64,9 @@ app.use((req, res, next) => {
     next();
 });
 
-const compression = require('compression');
 app.use(compression({
-    level: 6, // Medium compression level
-    threshold: 1024, // Compress responses larger than 1KB
+    level: 6,
+    threshold: 1024,
     filter: (req, res) => {
         if (req.headers['x-no-compression']) {
             return false;
@@ -50,18 +75,20 @@ app.use(compression({
     }
 }));
 
-const app = express();
-
-
-const timeout = require('express-timeout-handler');
 app.use(timeout.handler({
-    timeout: 10000, // 10 seconds
+    timeout: 10000,
     onTimeout: (req, res) => {
         logger.error(`Request timed out: ${req.originalUrl}`);
         Sentry.captureException(new Error(`Request timed out: ${req.originalUrl}`));
         res.status(504).json({ error: 'Request timed out' });
     }
 }));
+
+
+
+
+
+
 
 
 const swaggerOptions = {
@@ -124,16 +151,7 @@ const upload = multer({
 
 
 
-const logger = winston.createLogger({
-    level: 'info',
-    format: winston.format.combine(
-        winston.format.timestamp(),
-        winston.format.json()
-    ),
-    transports: [
-        new winston.transports.Console(), // Only console transport for Vercel
-    ]
-});
+
 
 
 mongoose.connect(process.env.MONGODB_URI)
@@ -163,13 +181,8 @@ if (!MONGODB_URI || !JWT_SECRET || !GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET ||
     process.exit(1);
 }
 
-Sentry.init({
-    dsn: process.env.SENTRY_DSN,
-    tracesSampleRate: 1.0, // Capture 100% of transactions for performance monitoring
-    environment: process.env.NODE_ENV || 'development',
-});
 
-app.use(Sentry.Handlers.requestHandler()); // Must be first middleware
+
 const WEB_URL = process.env.WEB_URL;
 const BASE_URL = process.env.BASE_URL;
 
@@ -439,32 +452,7 @@ app.get('/api/test-sentry', (req, res) => {
 });
 
 
-app.use((err, req, res, next) => {
-    Sentry.captureException(err, {
-        user: req.user ? { id: req.user.userId, email: req.user.email } : null,
-        extra: {
-            endpoint: req.originalUrl,
-            method: req.method
-        }
-    });
-    logger.error(`Unhandled error: ${err.stack}`);
-    if (err.code === 'EBADCSRFTOKEN') {
-        return res.status(403).json({ error: 'Invalid CSRF token' });
-    }
-    if (err.name === 'MongoError' && err.code === 11000) {
-        return res.status(400).json({ error: 'Duplicate key error', details: err.message });
-    }
-    if (err.name === 'MulterError') {
-        return res.status(400).json({ error: 'File upload error', details: err.message });
-    }
-    if (err.name === 'JsonWebTokenError') {
-        return res.status(401).json({ error: 'Invalid JWT token', details: err.message });
-    }
-    if (err.name === 'TokenExpiredError') {
-        return res.status(401).json({ error: 'JWT token expired', details: err.message });
-    }
-    res.status(500).json({ error: 'Internal server error', details: err.message });
-});
+
 
 const rateLimit = require('express-rate-limit');
 const loginLimiter = rateLimit({
@@ -498,6 +486,29 @@ async function createAdminUser() {
 }
 createAdminUser();
 
+
+
+// app.use(Sentry.getExpressErrorHandler());
+
+app.use((err, req, res, next) => {
+    logger.error(`Unhandled error: ${err.stack}`);
+    if (err.code === 'EBADCSRFTOKEN') {
+        return res.status(403).json({ error: 'Invalid CSRF token' });
+    }
+    if (err.name === 'MongoError' && err.code === 11000) {
+        return res.status(400).json({ error: 'Duplicate key error', details: err.message });
+    }
+    if (err.name === 'MulterError') {
+        return res.status(400).json({ error: 'File upload error', details: err.message });
+    }
+    if (err.name === 'JsonWebTokenError') {
+        return res.status(401).json({ error: 'Invalid JWT token', details: err.message });
+    }
+    if (err.name === 'TokenExpiredError') {
+        return res.status(401).json({ error: 'JWT token expired', details: err.message });
+    }
+    res.status(500).json({ error: 'Internal server error', details: err.message });
+});
 
 async function generateAIContext(question = '') {
     const projects = await Project.find().select('title description image rating stars links');
@@ -861,8 +872,6 @@ const comments = await Comment.find({ projectId: req.params.projectId })
         res.status(500).json({ error: 'Failed to fetch comments: ' + error.message });
     }
 });
-
-app.use(Sentry.Handlers.errorHandler()); // Must be before custom error handler
 
 
 app.get('/api/notifications', authenticateToken, isAdmin, async (req, res) => {
