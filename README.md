@@ -1,5 +1,4 @@
-![Portfolio Backend Logo](public/icons/logo.png)
-
+![Portfolio Backend Logo](portfolio-markk/frontend/public/assets/img/logo.svg)
 # Portfolio Backend
 
 This repository contains the backend for Ibrahim Al-Asfar's portfolio website, built with Express.js, MongoDB, and Cloudinary for file uploads. It supports authentication (JWT, Google, Facebook, GitHub), project management, skills, and an AI-powered chat system integrated with a FastAPI backend on Render.
