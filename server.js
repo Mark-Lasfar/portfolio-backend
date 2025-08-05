@@ -17,9 +17,11 @@ require('jspdf-autotable');
 require('dotenv').config();
 const winston = require('winston');
 const sharp = require('sharp');
+// const { body, validationResult } = require('express-validator');
 const swaggerJsDoc = require('swagger-jsdoc');
-const swaggerUi = require('swagger-ui-express');
 const { body, validationResult, param } = require('express-validator');
+const swaggerUi = require('swagger-ui-express');
+// const { body, validationResult, param } = require('express-validator');
 const csurf = require('csurf');
 const Sentry = require('@sentry/node');
 const morgan = require('morgan');
@@ -28,9 +30,12 @@ const timeout = require('express-timeout-handler');
 const compression = require('compression');
 const SentryTracing = require('@sentry/tracing');
 const app = express();
-
+const cron = require('node-cron');
+const { google } = require('googleapis');
 const { Handlers } = require('@sentry/node');
-
+const rateLimit = require('express-rate-limit');
+// const jsPDF = require('jspdf');
+const webpush = require('web-push');
 const logger = winston.createLogger({
     level: 'info',
     format: winston.format.combine(
@@ -61,6 +66,7 @@ app.use(cookieParser());
 app.use(csurf({ cookie: true }));
 app.use((req, res, next) => {
     res.locals.csrfToken = req.csrfToken();
+    logger.info(`Request: ${req.method} ${req.originalUrl} - Headers: ${JSON.stringify(req.headers)}`);
     next();
 });
 
@@ -88,7 +94,28 @@ app.use(timeout.handler({
 
 
 
-
+app.get('/api/check-session', authenticateToken, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.userId).select('username email profile');
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        res.json({
+            valid: true,
+            user: {
+                userId: req.user.userId,
+                email: req.user.email,
+                isAdmin: req.user.isAdmin,
+                username: user.username,
+                profile: user.profile
+            }
+        });
+    } catch (error) {
+        logger.error(`Error checking session: ${error.message}`);
+        Sentry.captureException(error);
+        res.status(500).json({ error: 'Failed to check session' });
+    }
+});
 
 
 const swaggerOptions = {
@@ -181,14 +208,20 @@ if (!MONGODB_URI || !JWT_SECRET || !GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET ||
     process.exit(1);
 }
 
-
+webpush.setVapidDetails(
+    'mailto:marklasfar@gmail.com',
+    process.env.VAPID_PUBLIC_KEY,
+    process.env.VAPID_PRIVATE_KEY
+);
 
 const WEB_URL = process.env.WEB_URL;
 const BASE_URL = process.env.BASE_URL;
 
 app.use(cors({
-    origin: WEB_URL,
-    credentials: true
+    origin: process.env.WEB_URL,
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token', 'X-New-Token', 'x-refresh-token']
 }));
 
 const transporter = nodemailer.createTransport({
@@ -235,8 +268,14 @@ const userSchema = new mongoose.Schema({
     password: { type: String },
     isAdmin: { type: Boolean, default: false },
     googleId: String,
+    googleAccessToken: String,
+    googleRefreshToken: String,
     facebookId: String,
+    facebookAccessToken: String,
+    facebookRefreshToken: String,
+    githubRefreshToken: String,
     githubId: String,
+    githubAccessToken: String,
     otp: String,
     otpExpires: Date,
     refreshTokens: [{ token: String, createdAt: { type: Date, default: Date.now } }],
@@ -285,10 +324,16 @@ const conversationSchema = new mongoose.Schema({
 });
 const Conversation = mongoose.model('Conversation', conversationSchema);
 
+
+
+
+
+
 passport.use(new GoogleStrategy({
     clientID: GOOGLE_CLIENT_ID,
     clientSecret: GOOGLE_CLIENT_SECRET,
-    callbackURL: `${process.env.BASE_URL}/auth/google/callback`
+    callbackURL: `${process.env.BASE_URL}/auth/google/callback`,
+    scope: ['profile', 'email', 'https://www.googleapis.com/auth/drive.file'] // Add Drive scope
 }, async (accessToken, refreshToken, profile, done) => {
     try {
         let user = await User.findOne({ googleId: profile.id });
@@ -296,11 +341,15 @@ passport.use(new GoogleStrategy({
             user = await User.create({
                 googleId: profile.id,
                 email: profile.emails[0].value,
-                username: profile.displayName
+                username: profile.displayName,
+                googleAccessToken: accessToken,
+                googleRefreshToken: refreshToken
             });
-        }
-        if (refreshToken) {
-            user.refreshTokens.push({ token: refreshToken });
+        } else {
+            user.googleAccessToken = accessToken;
+            if (refreshToken) {
+                user.googleRefreshToken = refreshToken;
+            }
             await user.save();
         }
         return done(null, user);
@@ -325,7 +374,8 @@ passport.use(new FacebookStrategy({
     clientID: FACEBOOK_CLIENT_ID,
     clientSecret: FACEBOOK_CLIENT_SECRET,
     callbackURL: `${process.env.BASE_URL}/auth/facebook/callback`,
-    profileFields: ['id', 'emails', 'displayName']
+    profileFields: ['id', 'emails', 'displayName', 'photos', 'posts', 'friends'],
+    scope: ['email', 'public_profile', 'user_posts', 'user_likes', 'user_friends'] // Add required scopes
 }, async (accessToken, refreshToken, profile, done) => {
     try {
         let user = await User.findOne({ facebookId: profile.id });
@@ -333,11 +383,14 @@ passport.use(new FacebookStrategy({
             user = await User.create({
                 facebookId: profile.id,
                 email: profile.emails ? profile.emails[0].value : `${profile.id}@facebook.com`,
-                username: profile.displayName
+                username: profile.displayName,
+                facebookAccessToken: accessToken // Store access token for API calls
             });
-        }
-        if (refreshToken) {
-            user.refreshTokens.push({ token: refreshToken });
+        } else {
+            user.facebookAccessToken = accessToken; // Update access token
+            if (refreshToken) {
+                user.refreshTokens.push({ token: refreshToken });
+            }
             await user.save();
         }
         return done(null, user);
@@ -361,7 +414,8 @@ app.get('/auth/facebook/callback', passport.authenticate('facebook', { session: 
 passport.use(new GitHubStrategy({
     clientID: GITHUB_CLIENT_ID,
     clientSecret: GITHUB_CLIENT_SECRET,
-    callbackURL: `${process.env.BASE_URL}/auth/github/callback`
+    callbackURL: `${process.env.BASE_URL}/auth/github/callback`,
+    scope: ['user:email', 'repo'] // Add repo scope for repository access
 }, async (accessToken, refreshToken, profile, done) => {
     try {
         let user = await User.findOne({ githubId: profile.id });
@@ -369,11 +423,14 @@ passport.use(new GitHubStrategy({
             user = await User.create({
                 githubId: profile.id,
                 email: profile.emails ? profile.emails[0].value : `${profile.id}@github.com`,
-                username: profile.displayName || profile.username
+                username: profile.displayName || profile.username,
+                githubAccessToken: accessToken // Store access token
             });
-        }
-        if (refreshToken) {
-            user.refreshTokens.push({ token: refreshToken });
+        } else {
+            user.githubAccessToken = accessToken;
+            if (refreshToken) {
+                user.refreshTokens.push({ token: refreshToken });
+            }
             await user.save();
         }
         return done(null, user);
@@ -383,7 +440,13 @@ passport.use(new GitHubStrategy({
     }
 }));
 app.get('/api/csrf-token', (req, res) => {
-    res.json({ csrfToken: req.csrfToken() });
+    const csrfToken = req.csrfToken ? req.csrfToken() : null;
+    if (!csrfToken) {
+        logger.error('Failed to generate CSRF token');
+        Sentry.captureMessage('Failed to generate CSRF token', { extra: { endpoint: '/api/csrf-token', method: 'GET' } });
+        return res.status(500).json({ error: 'Failed to generate CSRF token' });
+    }
+    res.json({ csrfToken });
 });
 
 app.get('/auth/github/callback', passport.authenticate('github', { session: false }), async (req, res) => {
@@ -397,6 +460,225 @@ app.get('/auth/github/callback', passport.authenticate('github', { session: fals
     }
 });
 
+
+
+app.get('/api/facebook/posts', authenticateToken, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.userId);
+
+        if (!user.facebookAccessToken) {
+            return res.status(400).json({ error: 'Facebook account not linked' });
+        }
+
+        let accessToken = user.facebookAccessToken;
+
+        // Attempt to fetch posts
+        let response;
+        try {
+            response = await axios.get('https://graph.facebook.com/v20.0/me?fields=posts{created_time,message,likes.summary(true),comments.summary(true),shares},name,email', {
+                headers: { Authorization: `Bearer ${accessToken}` },
+            });
+        } catch (error) {
+            if (error.response?.status === 401 && user.facebookRefreshToken) {
+                try {
+                    // Attempt to refresh the token
+                    const refreshResponse = await axios.get('https://graph.facebook.com/v20.0/oauth/access_token', {
+                        params: {
+                            grant_type: 'fb_exchange_token',
+                            client_id: process.env.FACEBOOK_CLIENT_ID,
+                            client_secret: process.env.FACEBOOK_CLIENT_SECRET,
+                            fb_exchange_token: user.facebookRefreshToken,
+                        },
+                    });
+
+                    accessToken = refreshResponse.data.access_token;
+                    user.facebookAccessToken = accessToken;
+                    await user.save();
+
+                    // Retry the request with the new token
+                    response = await axios.get('https://graph.facebook.com/v20.0/me?fields=posts{created_time,message,likes.summary(true),comments.summary(true),shares},name,email', {
+                        headers: { Authorization: `Bearer ${accessToken}` },
+                    });
+                } catch (refreshError) {
+                    logger.error(`Failed to refresh Facebook token: ${refreshError.message}`);
+                    Sentry.captureException(refreshError);
+                    return res.status(401).json({ error: 'Facebook access token expired. Please re-authenticate.' });
+                }
+            } else {
+                throw error; // Re-throw if not a 401 or no refresh token
+            }
+        }
+
+        const posts = response.data.posts.data.map(post => ({
+            id: post.id,
+            created_time: post.created_time,
+            message: post.message || '',
+            likes: post.likes?.summary?.total_count || 0,
+            comments: post.comments?.summary?.total_count || 0,
+            shares: post.shares?.count || 0,
+        }));
+
+        res.json({ posts, profile: { name: response.data.name, email: response.data.email } });
+    } catch (error) {
+        if (error.response?.status === 401) {
+            return res.status(401).json({ error: 'Facebook access token expired. Please re-authenticate.' });
+        }
+
+        logger.error(`Error fetching Facebook posts: ${error.message}`);
+        Sentry.captureException(error);
+        res.status(500).json({ error: 'Failed to fetch Facebook posts' });
+    }
+});
+
+app.get('/api/github/repos', authenticateToken, async (req, res) => {
+    const cacheKey = `github:repos:${req.user.userId}`;
+    const cachedRepos = await client.get(cacheKey);
+
+    if (cachedRepos) {
+        return res.json(JSON.parse(cachedRepos));
+    }
+
+    try {
+        const user = await User.findById(req.user.userId);
+
+        if (!user.githubAccessToken) {
+            return res.status(400).json({ error: 'GitHub account not linked' });
+        }
+
+        let accessToken = user.githubAccessToken;
+
+        // Attempt to fetch repos
+        let response;
+        try {
+            response = await axios.get('https://api.github.com/user/repos', {
+                headers: { Authorization: `Bearer ${accessToken}` },
+            });
+        } catch (error) {
+            if (error.response?.status === 401 && user.githubRefreshToken) {
+                try {
+                    // Attempt to refresh the token
+                    const refreshResponse = await axios.post('https://api.github.com/oauth/access_token', {
+                        client_id: process.env.GITHUB_CLIENT_ID,
+                        client_secret: process.env.GITHUB_CLIENT_SECRET,
+                        refresh_token: user.githubRefreshToken,
+                        grant_type: 'refresh_token',
+                    }, {
+                        headers: { 'Accept': 'application/json' },
+                    });
+
+                    accessToken = refreshResponse.data.access_token;
+                    user.githubAccessToken = accessToken;
+                    if (refreshResponse.data.refresh_token) {
+                        user.githubRefreshToken = refreshResponse.data.refresh_token;
+                    }
+                    await user.save();
+
+                    // Retry the request with the new token
+                    response = await axios.get('https://api.github.com/user/repos', {
+                        headers: { Authorization: `Bearer ${accessToken}` },
+                    });
+                } catch (refreshError) {
+                    logger.error(`Failed to refresh GitHub token: ${refreshError.message}`);
+                    Sentry.captureException(refreshError);
+                    return res.status(401).json({ error: 'GitHub access token expired. Please re-authenticate.' });
+                }
+            } else {
+                throw error; // Re-throw if not a 401 or no refresh token
+            }
+        }
+
+        const repos = response.data.map(repo => ({
+            id: repo.id,
+            name: repo.name,
+            description: repo.description || 'No description provided',
+            url: repo.html_url,
+            image: repo.owner.avatar_url,
+        }));
+
+        await client.setEx(cacheKey, 3600, JSON.stringify(repos));
+        res.json(repos);
+    } catch (error) {
+        if (error.response?.status === 401) {
+            return res.status(401).json({ error: 'GitHub access token expired. Please re-authenticate.' });
+        }
+
+        logger.error(`Error fetching GitHub repos: ${error.message}`);
+        Sentry.captureException(error);
+        res.status(500).json({ error: 'Failed to fetch GitHub repos' });
+    }
+});
+
+app.post('/api/facebook/share-profile', authenticateToken, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.userId);
+        if (!user.facebookAccessToken) {
+            return res.status(400).json({ error: 'Facebook account not linked' });
+        }
+
+        const profileUrl = `${process.env.WEB_URL}/profile/${user.profile.nickname || user.username}`;
+        const message = `Check out my portfolio: ${profileUrl}`;
+
+        const response = await axios.post('https://graph.facebook.com/v20.0/me/feed', {
+            message,
+            link: profileUrl
+        }, {
+            headers: { Authorization: `Bearer ${user.facebookAccessToken}` }
+        });
+
+        res.json({ message: 'Profile shared successfully', postId: response.data.id });
+    } catch (error) {
+        logger.error(`Error sharing profile on Facebook: ${error.message}`);
+        Sentry.captureException(error);
+        res.status(500).json({ error: 'Failed to share profile' });
+    }
+});
+
+
+const facebookLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 10,
+    message: 'Too many Facebook API requests, please try again later.'
+});
+app.use('/api/facebook', facebookLimiter);
+
+
+
+app.post('/api/refresh-token', async (req, res) => {
+    const { refreshToken } = req.body;
+    if (!refreshToken) {
+        return res.status(401).json({ error: 'Refresh token required' });
+    }
+
+    try {
+        const user = await User.findOne({ 'refreshTokens.token': refreshToken });
+        if (!user) {
+            return res.status(403).json({ error: 'Invalid refresh token' });
+        }
+
+        const payload = jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET);
+        const newAccessToken = jwt.sign(
+            { userId: user._id, email: user.email },
+            process.env.JWT_SECRET,
+            { expiresIn: '1h' }
+        );
+
+        // Optionally rotate refresh token
+        user.refreshTokens = user.refreshTokens.filter(token => token.token !== refreshToken);
+        const newRefreshToken = jwt.sign(
+            { userId: user._id },
+            process.env.REFRESH_TOKEN_SECRET,
+            { expiresIn: '7d' }
+        );
+        user.refreshTokens.push({ token: newRefreshToken, createdAt: new Date() });
+        await user.save();
+
+        res.json({ accessToken: newAccessToken, refreshToken: newRefreshToken });
+    } catch (error) {
+        logger.error(`Error refreshing token: ${error.message}`);
+        Sentry.captureException(error);
+        res.status(403).json({ error: 'Invalid or expired refresh token' });
+    }
+});
 
 // app.get('/auth/canva', (req, res) => {
 //     const authUrl = `https://api.canva.com/v1/oauth/authorize?client_id=${process.env.CANVA_CLIENT_ID}&redirect_uri=${encodeURIComponent(process.env.BASE_URL + '/auth/canva/callback')}&response_type=code&scope=design:read,design:write,asset:private:read,asset:private:write`;
@@ -454,7 +736,7 @@ app.get('/api/test-sentry', (req, res) => {
 
 
 
-const rateLimit = require('express-rate-limit');
+// const rateLimit = require('express-rate-limit');
 const loginLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 5,
@@ -488,11 +770,195 @@ createAdminUser();
 
 
 
-// app.use(Sentry.getExpressErrorHandler());
+
+
+
+app.post('/api/google/save-cv', authenticateToken, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.userId);
+        if (!user.googleAccessToken) {
+            return res.status(400).json({ error: 'Google account not linked' });
+        }
+
+        const oauth2Client = new google.auth.OAuth2(
+            process.env.GOOGLE_CLIENT_ID,
+            process.env.GOOGLE_CLIENT_SECRET,
+            `${process.env.BASE_URL}/auth/google/callback`
+        );
+        oauth2Client.setCredentials({ access_token: user.googleAccessToken });
+
+        // Check if token is expired and try to refresh it
+        if (user.googleRefreshToken) {
+            try {
+                const { credentials } = await oauth2Client.refreshAccessToken();
+                user.googleAccessToken = credentials.access_token;
+                await user.save();
+                oauth2Client.setCredentials({ access_token: user.googleAccessToken });
+            } catch (refreshError) {
+                logger.error(`Failed to refresh Google token: ${refreshError.message}`);
+                Sentry.captureException(refreshError);
+                return res.status(401).json({ error: 'Google access token expired. Please re-authenticate.' });
+            }
+        }
+
+        const drive = google.drive({ version: 'v3', auth: oauth2Client });
+
+        // Create PDF with full CV details
+        const doc = new jsPDF();
+        doc.setFontSize(20);
+        doc.text(user.profile.nickname || user.username, 10, 20);
+
+        // Job Title
+        if (user.profile.jobTitle) {
+            doc.setFontSize(14);
+            doc.text(user.profile.jobTitle, 10, 30);
+        }
+
+        // Bio
+        if (user.profile.bio) {
+            doc.setFontSize(12);
+            doc.text('Bio:', 10, 40);
+            doc.text(doc.splitTextToSize(user.profile.bio, 180), 10, 50);
+        }
+
+        // Contact Info
+        let yOffset = user.profile.bio ? 70 : 40;
+        if (user.profile.phone || user.profile.socialLinks) {
+            doc.setFontSize(12);
+            doc.text('Contact:', 10, yOffset);
+            if (user.profile.phone) {
+                doc.text(`Phone: ${user.profile.phone}`, 10, yOffset + 10);
+                yOffset += 10;
+            }
+            Object.keys(user.profile.socialLinks).forEach((key, index) => {
+                if (user.profile.socialLinks[key]) {
+                    doc.text(`${key}: ${user.profile.socialLinks[key]}`, 10, yOffset + 10 * (index + 1));
+                }
+            });
+            yOffset += 10 * (Object.keys(user.profile.socialLinks).length + 1);
+        }
+
+        // Education
+        if (user.profile.education && user.profile.education.length > 0) {
+            doc.setFontSize(12);
+            doc.text('Education:', 10, yOffset);
+            doc.autoTable({
+                startY: yOffset + 10,
+                head: [['Institution', 'Degree', 'Year']],
+                body: user.profile.education.map(edu => [edu.institution, edu.degree, edu.year]),
+            });
+            yOffset = doc.lastAutoTable.finalY + 10;
+        }
+
+        // Experience
+        if (user.profile.experience && user.profile.experience.length > 0) {
+            doc.setFontSize(12);
+            doc.text('Experience:', 10, yOffset);
+            doc.autoTable({
+                startY: yOffset + 10,
+                head: [['Company', 'Role', 'Duration']],
+                body: user.profile.experience.map(exp => [exp.company, exp.role, exp.duration]),
+            });
+            yOffset = doc.lastAutoTable.finalY + 10;
+        }
+
+        // Certificates
+        if (user.profile.certificates && user.profile.certificates.length > 0) {
+            doc.setFontSize(12);
+            doc.text('Certificates:', 10, yOffset);
+            doc.autoTable({
+                startY: yOffset + 10,
+                head: [['Name', 'Issuer', 'Year']],
+                body: user.profile.certificates.map(cert => [cert.name, cert.issuer, cert.year]),
+            });
+            yOffset = doc.lastAutoTable.finalY + 10;
+        }
+
+        // Skills
+        if (user.profile.skills && user.profile.skills.length > 0) {
+            doc.setFontSize(12);
+            doc.text('Skills:', 10, yOffset);
+            doc.autoTable({
+                startY: yOffset + 10,
+                head: [['Name', 'Percentage']],
+                body: user.profile.skills.map(skill => [skill.name, `${skill.percentage}%`]),
+            });
+            yOffset = doc.lastAutoTable.finalY + 10;
+        }
+
+        // Projects
+        if (user.profile.projects && user.profile.projects.length > 0) {
+            doc.setFontSize(12);
+            doc.text('Projects:', 10, yOffset);
+            doc.autoTable({
+                startY: yOffset + 10,
+                head: [['Title', 'Description', 'Links']],
+                body: user.profile.projects.map(proj => [
+                    proj.title,
+                    proj.description,
+                    proj.links.map(link => `${link.option}: ${link.value}`).join(', '),
+                ]),
+            });
+        }
+
+        const fileMetadata = {
+            name: `${user.profile.nickname || user.username}_resume.pdf`,
+            mimeType: 'application/pdf',
+        };
+        const media = {
+            mimeType: 'application/pdf',
+            body: doc.output('stream'),
+        };
+
+        const response = await drive.files.create({
+            resource: fileMetadata,
+            media,
+            fields: 'id, webViewLink',
+        });
+
+        // Track CV save event in Google Analytics
+        try {
+            await axios.post('https://www.google-analytics.com/mp/collect', {
+                measurement_id: process.env.GOOGLE_ANALYTICS_ID,
+                api_secret: process.env.GOOGLE_ANALYTICS_API_SECRET,
+                events: [{
+                    name: 'save_cv',
+                    params: {
+                        userId: req.user.userId,
+                        timestamp: new Date().toISOString(),
+                    },
+                }],
+            }, {
+                headers: { 'Content-Type': 'application/json' },
+                timeout: 5000,
+            });
+            logger.info(`CV save tracked for user ${req.user.userId}`);
+        } catch (analyticsError) {
+            logger.error(`Failed to track CV save: ${analyticsError.message}`);
+            Sentry.captureException(analyticsError);
+        }
+
+        res.json({
+            message: 'CV saved to Google Drive',
+            fileId: response.data.id,
+            link: response.data.webViewLink,
+        });
+    } catch (error) {
+        if (error.response?.status === 401) {
+            return res.status(401).json({ error: 'Google access token expired. Please re-authenticate.' });
+        }
+        logger.error(`Error saving CV to Google Drive: ${error.message}`);
+        Sentry.captureException(error);
+        res.status(500).json({ error: 'Failed to save CV to Google Drive' });
+    }
+});
+
 
 app.use((err, req, res, next) => {
     logger.error(`Unhandled error: ${err.stack}`);
+    Sentry.captureException(err, { extra: { endpoint: req.originalUrl, method: req.method } });
     if (err.code === 'EBADCSRFTOKEN') {
+        logger.warn(`Invalid CSRF token for ${req.originalUrl}`);
         return res.status(403).json({ error: 'Invalid CSRF token' });
     }
     if (err.name === 'MongoError' && err.code === 11000) {
@@ -542,55 +1008,59 @@ async function sendNotification(userId, message) {
         logger.error('Error sending notification:', error);
     }
 }
-function authenticateToken(req, res, next) {
+
+async function authenticateToken(req, res, next) {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
+
     if (!token) {
-        const error = new Error('Token is required');
-        Sentry.captureException(error, { extra: { endpoint: req.originalUrl, method: req.method } });
+        logger.warn(`No token provided for endpoint: ${req.originalUrl}`);
+        Sentry.captureMessage('No token provided', { extra: { endpoint: req.originalUrl, method: req.method } });
         return res.status(401).json({ error: 'Token is required' });
     }
 
-    jwt.verify(token, process.env.JWT_SECRET, async (err, user) => {
-        if (err) {
-            if (err.name === 'TokenExpiredError') {
-                const refreshToken = req.body.refreshToken || req.headers['x-refresh-token'];
-                if (!refreshToken) {
-                    const error = new Error('Refresh token is required');
-                    Sentry.captureException(error, { extra: { endpoint: req.originalUrl, method: req.method } });
-                    return res.status(401).json({ error: 'Refresh token is required' });
+    try {
+        const payload = jwt.verify(token, process.env.JWT_SECRET);
+        req.user = payload;
+        Sentry.setUser({ id: payload.userId, email: payload.email });
+        next();
+    } catch (error) {
+        if (error.name === 'TokenExpiredError') {
+            const refreshToken = req.body.refreshToken || req.headers['x-refresh-token'] || req.cookies.refreshToken;
+            if (!refreshToken) {
+                logger.warn(`No refresh token provided for expired token at: ${req.originalUrl}`);
+                Sentry.captureMessage('No refresh token provided for expired token', { extra: { endpoint: req.originalUrl, method: req.method } });
+                return res.status(401).json({ error: 'Access token expired. Please provide a refresh token.' });
+            }
+
+            try {
+                const decoded = jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET);
+                const user = await User.findOne({ _id: decoded.userId, 'refreshTokens.token': refreshToken });
+                if (!user) {
+                    logger.warn(`Invalid refresh token for user ${decoded.userId}`);
+                    Sentry.captureMessage('Invalid refresh token', { extra: { endpoint: req.originalUrl, method: req.method } });
+                    return res.status(403).json({ error: 'Invalid refresh token' });
                 }
-                try {
-                    const decoded = jwt.verify(refreshToken, process.env.JWT_SECRET);
-                    const dbUser = await User.findOne({ _id: decoded.userId, 'refreshTokens.token': refreshToken });
-                    if (!dbUser) {
-                        const error = new Error('Invalid refresh token');
-                        Sentry.captureException(error, { extra: { endpoint: req.originalUrl, method: req.method } });
-                        return res.status(403).json({ error: 'Invalid refresh token' });
-                    }
-                    const newToken = jwt.sign({ userId: dbUser._id, isAdmin: dbUser.isAdmin }, process.env.JWT_SECRET, { expiresIn: '1h' });
-                    req.user = { userId: dbUser._id, isAdmin: dbUser.isAdmin, email: dbUser.email };
-                    Sentry.setUser({ id: dbUser._id, email: dbUser.email }); // Set user for Sentry
-                    res.setHeader('X-New-Token', newToken);
-                    next();
-                } catch (refreshError) {
-                    Sentry.captureException(refreshError, { extra: { endpoint: req.originalUrl, method: req.method } });
-                    return res.status(403).json({ error: 'Failed to refresh token' });
-                }
-            } else {
-                Sentry.captureException(err, { extra: { endpoint: req.originalUrl, method: req.method } });
-                return res.status(403).json({ error: 'Invalid token' });
+
+                const newToken = jwt.sign({ userId: user._id, isAdmin: user.isAdmin, email: user.email }, process.env.JWT_SECRET, { expiresIn: '1h' });
+                req.user = { userId: user._id, isAdmin: user.isAdmin, email: user.email };
+                res.setHeader('X-New-Token', newToken);
+                logger.info(`Token refreshed for user ${user._id}`);
+                next();
+            } catch (refreshError) {
+                logger.error(`Failed to refresh token: ${refreshError.message}`);
+                Sentry.captureException(refreshError, { extra: { endpoint: req.originalUrl, method: req.method } });
+                return res.status(403).json({ error: 'Failed to refresh token' });
             }
         } else {
-            req.user = user;
-            Sentry.setUser({ id: user.userId, email: user.email }); // Set user for Sentry
-            next();
+            logger.error(`Invalid token: ${error.message}`);
+            Sentry.captureException(error, { extra: { endpoint: req.originalUrl, method: req.method } });
+            return res.status(403).json({ error: 'Invalid token' });
         }
-    });
-
-
-    
+    }
 }
+
+
 app.get('/api/verify-token', authenticateToken, async (req, res) => {
     const user = await User.findById(req.user.userId);
     if (!user) return res.status(404).json({ error: 'User not found' });
@@ -1032,59 +1502,139 @@ app.delete('/api/skills/:skillId', authenticateToken, isAdmin, async (req, res) 
     }
 });
 
+
 app.get('/api/profile/:nickname', async (req, res) => {
-    const { nickname } = req.params;
     try {
-        const decodedNickname = decodeURIComponent(nickname);
+        const decodedNickname = decodeURIComponent(req.params.nickname);
         const user = await User.findOne({
             $or: [
                 { 'profile.nickname': decodedNickname },
-                { username: decodedNickname }
-            ]
-        });
+                { username: decodedNickname },
+            ],
+        }).select('username profile notifications');
+
         if (!user) {
+            logger.warn(`Profile not found for nickname: ${decodedNickname}`);
             return res.status(404).json({ error: `Profile not found for nickname: ${decodedNickname}` });
         }
-        if (!user.profile.isPublic && !req.user) {
+
+        // Check privacy settings
+        if (!user.profile.isPublic && (!req.user || req.user.userId !== user._id.toString())) {
+            logger.warn(`Unauthorized access attempt to private profile: ${decodedNickname} by user: ${req.user?.userId || 'anonymous'}`);
             return res.status(403).json({ error: 'Profile is private', loginRequired: true });
         }
-        res.json({
+
+        // Track profile view with Google Analytics
+        try {
+            await axios.post('https://www.google-analytics.com/mp/collect', {
+                measurement_id: process.env.GOOGLE_ANALYTICS_ID,
+                api_secret: process.env.GOOGLE_ANALYTICS_API_SECRET,
+                events: [{
+                    name: 'view_profile',
+                    params: {
+                        nickname: decodedNickname,
+                        userId: req.user?.userId || 'anonymous',
+                        timestamp: new Date().toISOString(),
+                    },
+                }],
+            }, {
+                headers: { 'Content-Type': 'application/json' },
+                timeout: 5000,
+            });
+            logger.info(`Profile view tracked for ${decodedNickname}`);
+        } catch (analyticsError) {
+            logger.error(`Failed to track profile view for ${decodedNickname}: ${analyticsError.message}`);
+            Sentry.captureException(analyticsError);
+        }
+
+        // Send push notification to profile owner
+        if (user.notifications && user.notifications.length > 0 && req.user?.userId !== user._id.toString()) {
+            try {
+                const subscription = user.notifications[0]; // Assuming notifications store push subscriptions
+                const payload = JSON.stringify({
+                    title: 'Profile Viewed',
+                    body: `Your profile (${decodedNickname}) was viewed by ${req.user?.userId || 'an anonymous user'}.`,
+                });
+                await webpush.sendNotification(subscription, payload);
+                logger.info(`Push notification sent to ${user._id} for profile view`);
+            } catch (pushError) {
+                logger.error(`Failed to send push notification: ${pushError.message}`);
+                Sentry.captureException(pushError);
+            }
+        }
+
+        // Prepare response
+        const response = {
             username: user.username,
             profile: {
                 nickname: user.profile.nickname,
-                portfolioName: user.profile.portfolioName,
+                portfolioName: user.profile.portfolioName || 'Portfolio',
                 avatar: user.profile.avatar,
-                avatarDisplayType: user.profile.avatarDisplayType,
-                svgColor: user.profile.svgColor,
-                jobTitle: user.profile.jobTitle,
-                bio: user.profile.bio,
-                phone: user.profile.phone,
-                socialLinks: user.profile.socialLinks,
-                education: user.profile.education,
-                experience: user.profile.experience,
-                certificates: user.profile.certificates,
-                interests: user.profile.interests,
-                skills: user.profile.skills,
-                projects: user.profile.projects,
-                pdfFormat: user.profile.pdfFormat || 'jspdf'
-            }
-        });
+                avatarDisplayType: user.profile.avatarDisplayType || 'normal',
+                svgColor: user.profile.svgColor || '#000000',
+                jobTitle: user.profile.jobTitle || '',
+                bio: user.profile.bio || '',
+                phone: user.profile.phone || '',
+                socialLinks: user.profile.socialLinks || {},
+                education: user.profile.education || [],
+                experience: user.profile.experience || [],
+                certificates: user.profile.certificates || [],
+                interests: user.profile.interests || [],
+                skills: user.profile.skills || [],
+                projects: user.profile.projects || [],
+                pdfFormat: user.profile.pdfFormat || 'jspdf',
+                isPublic: user.profile.isPublic,
+                status: user.profile.status || 'Available',
+            },
+        };
+
+        res.json(response);
     } catch (error) {
-        logger.error(`Error fetching profile for ${nickname}: ${error.message}`);
+        logger.error(`Error fetching profile for ${req.params.nickname}: ${error.message}`);
         Sentry.captureException(error);
-        res.status(500).json({ error: 'Failed to fetch profile: ' + error.message });
+        res.status(500).json({ error: `Failed to fetch profile: ${error.message}` });
+    }
+});
+
+
+
+const googleLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 10,
+    message: 'Too many Google API requests, please try again later.'
+});
+app.use('/api/google', googleLimiter);
+
+
+
+
+app.get('/api/check-nickname', authenticateToken, [
+    body('nickname').isLength({ min: 3 }).withMessage('Nickname must be at least 3 characters long'),
+], async (req, res) => {
+    userSchema.index({ 'profile.nickname': 1 }, { unique: true, sparse: true });
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+    }
+
+    try {
+        const { nickname } = req.query;
+        if (!nickname) {
+            return res.status(400).json({ error: 'Nickname is required' });
+        }
+        const user = await User.findOne({ 'profile.nickname': nickname, _id: { $ne: req.user.userId } });
+        res.json({ available: !user });
+    } catch (error) {
+        logger.error(`Error checking nickname: ${error.message}`);
+        Sentry.captureException(error);
+        res.status(500).json({ error: 'Failed to check nickname' });
     }
 });
 
 app.put('/api/profile', authenticateToken, upload.fields([
     { name: 'avatar', maxCount: 1 },
-    { name: 'projectImages', maxCount: 10 }
-    
-]), 
-
-
-
-[
+    { name: 'projectImages', maxCount: 10 },
+]), [
     body('nickname').optional().isLength({ min: 3 }).withMessage('Nickname must be at least 3 characters long'),
     body('jobTitle').optional().notEmpty().withMessage('Job title cannot be empty'),
     body('bio').optional().notEmpty().withMessage('Bio cannot be empty'),
@@ -1105,7 +1655,7 @@ app.put('/api/profile', authenticateToken, upload.fields([
     body('education').optional().custom(value => {
         try {
             const parsed = JSON.parse(value);
-            return Array.isArray(parsed) && parsed.every(item => item.institution && item.degree && item.year);
+            return Array.isArray(parsed) && parsed.every(item => item.institution && item.degree && item.year && !isNaN(parseInt(item.year)) && parseInt(item.year) >= 1900 && parseInt(item.year) <= new Date().getFullYear());
         } catch {
             return false;
         }
@@ -1121,7 +1671,7 @@ app.put('/api/profile', authenticateToken, upload.fields([
     body('certificates').optional().custom(value => {
         try {
             const parsed = JSON.parse(value);
-            return Array.isArray(parsed) && parsed.every(item => item.name && item.issuer && item.year);
+            return Array.isArray(parsed) && parsed.every(item => item.name && item.issuer && item.year && !isNaN(parseInt(item.year)) && parseInt(item.year) >= 1900 && parseInt(item.year) <= new Date().getFullYear());
         } catch {
             return false;
         }
@@ -1137,7 +1687,7 @@ app.put('/api/profile', authenticateToken, upload.fields([
     body('projects').optional().custom(value => {
         try {
             const parsed = JSON.parse(value);
-            return Array.isArray(parsed) && parsed.every(item => item.title && item.description && item.image && /^https?:\/\/[^\s/$.?#].[^\s]*$/.test(item.image));
+            return Array.isArray(parsed) && parsed.every(item => item.title && item.description && (!item.image || /^https?:\/\/[^\s/$.?#].[^\s]*$/.test(item.image)));
         } catch {
             return false;
         }
@@ -1152,57 +1702,129 @@ app.put('/api/profile', authenticateToken, upload.fields([
     }).withMessage('Invalid interests format'),
     body('isPublic').optional().isBoolean().withMessage('isPublic must be a boolean'),
     body('avatarDisplayType').optional().isIn(['svg', 'normal']).withMessage('Invalid avatar display type'),
-    body('svgColor').optional().matches(/^#[0-9A-Fa-f]{6}$/).withMessage('Invalid SVG color format')
+    body('svgColor').optional().matches(/^#[0-9A-Fa-f]{6}$/).withMessage('Invalid SVG color format'),
+    body('githubProjectIds').optional().custom(value => {
+        try {
+            const parsed = JSON.parse(value);
+            return Array.isArray(parsed) && parsed.every(id => Number.isInteger(Number(id)));
+        } catch {
+            return false;
+        }
+    }).withMessage('Invalid GitHub project IDs format'),
 ], async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
         return res.status(400).json({ errors: errors.array() });
     }
+
     try {
-        const { nickname, jobTitle, bio, phone, socialLinks, education, experience, certificates, skills, projects, interests, isPublic, avatarDisplayType, svgColor } = req.body;
+        const {
+            nickname, jobTitle, bio, phone, socialLinks, education, experience,
+            certificates, skills, projects, interests, isPublic, avatarDisplayType,
+            svgColor, status, portfolioName, pdfFormat
+        } = req.body;
+
         const user = await User.findById(req.user.userId);
-        if (!user) return res.status(404).json({ error: 'User not found' });
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        // التحقق من توفر الـ nickname إذا تم إرساله
+        if (nickname && nickname !== user.profile.nickname) {
+            const existingUser = await User.findOne({ 'profile.nickname': nickname, _id: { $ne: user._id } });
+            if (existingUser) {
+                return res.status(400).json({ error: 'Nickname already taken' });
+            }
+        }
 
         const parseJSON = (str, defaultValue) => {
             try {
                 return str ? JSON.parse(str) : defaultValue;
             } catch (error) {
                 logger.error(`Invalid JSON for ${str}: ${error.message}`);
+                Sentry.captureException(error);
                 return defaultValue;
             }
         };
 
+        // Parse input fields
         const parsedSocialLinks = parseJSON(socialLinks, user.profile.socialLinks);
         const parsedEducation = parseJSON(education, user.profile.education);
         const parsedExperience = parseJSON(experience, user.profile.experience);
         const parsedCertificates = parseJSON(certificates, user.profile.certificates);
         const parsedSkills = parseJSON(skills, user.profile.skills);
         let parsedProjects = parseJSON(projects, user.profile.projects);
+        const parsedInterests = parseJSON(interests, user.profile.interests);
+        const parsedGithubProjectIds = parseJSON(githubProjectIds, []);
 
+        // Handle avatar image with transparency check
+        let hasTransparency = false;
+        if (req.files && req.files.avatar) {
+            try {
+                const imageBuffer = req.files.avatar[0].buffer;
+                const image = sharp(imageBuffer);
+                const metadata = await image.metadata();
+                hasTransparency = metadata.hasAlpha || false;
+                const uploadResult = await cloudinary.uploader.upload_stream({ folder: 'avatars' }).end(imageBuffer);
+                user.profile.avatar = uploadResult.secure_url;
+            } catch (imageError) {
+                logger.error(`Error processing avatar image: ${imageError.message}`);
+                Sentry.captureException(imageError);
+            }
+        }
+
+        // Handle project images
         if (req.files && req.files.projectImages) {
-            parsedProjects = parsedProjects.map((project, index) => ({
-                ...project,
-                image: req.files.projectImages && req.files.projectImages[index] ? req.files.projectImages[index].path : project.image
+            parsedProjects = await Promise.all(parsedProjects.map(async (project, index) => {
+                if (req.files.projectImages[index]) {
+                    try {
+                        const imageBuffer = req.files.projectImages[index].buffer;
+                        const uploadResult = await cloudinary.uploader.upload_stream({ folder: 'projects' }).end(imageBuffer);
+                        return { ...project, image: uploadResult.secure_url };
+                    } catch (imageError) {
+                        logger.error(`Error processing project image ${index}: ${imageError.message}`);
+                        Sentry.captureException(imageError);
+                        return project;
+                    }
+                }
+                return project;
             }));
         }
 
-let hasTransparency = false;
-if (req.files && req.files.avatar) {
-    try {
-        const imageBuffer = req.files.avatar[0].buffer;
-        const image = sharp(imageBuffer);
-        const metadata = await image.metadata();
-        hasTransparency = metadata.hasAlpha || false;
-        user.profile.avatar = req.files.avatar[0].path;
-    } catch (imageError) {
-        logger.error(`Error processing avatar image: ${imageError.message}`);
-        Sentry.captureException(imageError);
-    }
-}
+        // Fetch GitHub projects if githubProjectIds are provided
+        if (parsedGithubProjectIds.length > 0 && user.githubAccessToken) {
+            try {
+                for (const githubProjectId of parsedGithubProjectIds) {
+                    if (!Number.isInteger(Number(githubProjectId))) {
+                        throw new Error(`Invalid GitHub project ID: ${githubProjectId}`);
+                    }
+                    const response = await axios.get(`https://api.github.com/repositories/${githubProjectId}`, {
+                        headers: { Authorization: `Bearer ${user.githubAccessToken}` },
+                    });
+                    if (response.status === 401) {
+                        return res.status(401).json({ error: 'GitHub access token expired. Please re-authenticate.' });
+                    }
+                    const repo = response.data;
+                    parsedProjects.push({
+                        title: repo.name,
+                        description: repo.description || 'No description provided',
+                        image: req.files.projectImages && req.files.projectImages[parsedProjects.length]
+                            ? (await cloudinary.uploader.upload_stream({ folder: 'projects' }).end(req.files.projectImages[parsedProjects.length].buffer)).secure_url
+                            : repo.owner.avatar_url,
+                        links: [{ option: 'GitHub', value: repo.html_url }],
+                    });
+                }
+            } catch (githubError) {
+                logger.error(`Error fetching GitHub project: ${githubError.message}`);
+                Sentry.captureException(githubError);
+                return res.status(400).json({ error: `Failed to fetch GitHub project: ${githubError.message}` });
+            }
+        }
 
+        // Update user profile
         user.profile = {
             nickname: nickname || user.profile.nickname,
-            avatar: user.profile.avatar,
+            avatar: user.profile.avatar || undefined,
             jobTitle: jobTitle || user.profile.jobTitle,
             bio: bio || user.profile.bio,
             phone: phone || user.profile.phone,
@@ -1212,21 +1834,112 @@ if (req.files && req.files.avatar) {
             certificates: parsedCertificates,
             skills: parsedSkills,
             projects: parsedProjects,
-            interests: parseJSON(interests, user.profile.interests),
+            interests: parsedInterests,
             isPublic: isPublic !== undefined ? isPublic === 'true' : user.profile.isPublic,
             avatarDisplayType: avatarDisplayType || user.profile.avatarDisplayType,
             svgColor: svgColor || user.profile.svgColor,
-            customFields: parseJSON(req.body.customFields, user.profile.customFields || [])
+            customFields: parseJSON(req.body.customFields, user.profile.customFields || []),
+            portfolioName: portfolioName || user.profile.portfolioName || 'Portfolio',
+            status: status || user.profile.status || 'Available',
+            pdfFormat: pdfFormat || user.profile.pdfFormat || 'jspdf'
         };
 
         await user.save();
-        logger.info(`Profile updated for user ${req.user.userId}`);
-        res.json({ success: true, message: 'Profile updated successfully', profile: user.profile, hasTransparency });
+
+        // Track profile update in Google Analytics
+        try {
+            await axios.post('https://www.google-analytics.com/mp/collect', {
+                measurement_id: process.env.GOOGLE_ANALYTICS_ID,
+                api_secret: process.env.GOOGLE_ANALYTICS_API_SECRET,
+                events: [{
+                    name: 'update_profile',
+                    params: {
+                        userId: req.user.userId,
+                        updatedFields: Object.keys(req.body),
+                        timestamp: new Date().toISOString(),
+                    },
+                }],
+            }, {
+                headers: { 'Content-Type': 'application/json' },
+                timeout: 5000,
+            });
+            logger.info(`Profile update tracked for user ${req.user.userId}`);
+        } catch (analyticsError) {
+            logger.error(`Failed to track profile update: ${analyticsError.message}`);
+            Sentry.captureException(analyticsError);
+        }
+
+        res.json({
+            success: true,
+            message: 'Profile updated successfully',
+            profile: user.profile,
+            hasTransparency,
+        });
     } catch (error) {
         logger.error(`Error updating profile for user ${req.user.userId}: ${error.message}`);
+        Sentry.captureException(error);
         res.status(500).json({ error: `Failed to update profile: ${error.message}` });
     }
 });
+
+
+cron.schedule('0 0 * * *', async () => {
+    try {
+        const users = await User.find({ githubAccessToken: { $exists: true } });
+        for (const user of users) {
+            const hasGitHubProjects = user.profile.projects.some(project =>
+                project.links.some(link => link.option === 'GitHub')
+            );
+            if (!hasGitHubProjects) continue;
+
+            try {
+                const response = await axios.get('https://api.github.com/user/repos', {
+                    headers: { Authorization: `Bearer ${user.githubAccessToken}` },
+                });
+                if (response.status === 401) {
+                    logger.warn(`GitHub token expired for user ${user.email}`);
+                    continue;
+                }
+                const repos = response.data;
+
+                user.profile.projects = user.profile.projects.map(project => {
+                    const repo = repos.find(r => r.html_url === project.links.find(l => l.option === 'GitHub')?.value);
+                    if (repo) {
+                        return {
+                            ...project,
+                            title: repo.name,
+                            description: repo.description || project.description,
+                            image: project.image || repo.owner.avatar_url,
+                        };
+                    }
+                    return project;
+                });
+
+                await user.save();
+                logger.info(`Synced GitHub projects for user ${user.email}`);
+            } catch (error) {
+                if (error.response?.status === 401) {
+                    logger.warn(`GitHub token expired for user ${user.email}`);
+                    continue;
+                }
+                logger.error(`Error syncing GitHub projects for user ${user.email}: ${error.message}`);
+                Sentry.captureException(error);
+            }
+        }
+    } catch (error) {
+        logger.error(`Error in cron job: ${error.message}`);
+        Sentry.captureException(error);
+    }
+});
+
+
+const githubLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 10,
+    message: 'Too many GitHub API requests, please try again later.'
+});
+app.use('/api/github', githubLimiter);
+
 
 app.get('/api/user-interactions', authenticateToken, async (req, res) => {
     try {
@@ -1261,12 +1974,25 @@ app.delete('/api/users/:userId', authenticateToken, isAdmin, async (req, res) =>
     }
 });
 
-app.get('/api/profile/pdf/:nickname', async (req, res) => {
+app.get('/api/profile/pdf/:nickname', authenticateToken, async (req, res) => {
     try {
         const decodedNickname = decodeURIComponent(req.params.nickname);
-        const user = await User.findOne({ 'profile.nickname': decodedNickname });
-        if (!user) return res.status(404).json({ error: 'User not found' });
-        if (!user.profile.isPublic && !req.user) return res.status(403).json({ error: 'Profile is private' });
+        const user = await User.findOne({
+            $or: [
+                { 'profile.nickname': decodedNickname },
+                { username: decodedNickname },
+            ],
+        });
+
+        if (!user) {
+            logger.warn(`Profile not found for nickname: ${decodedNickname}`);
+            return res.status(404).json({ error: `Profile not found for nickname: ${decodedNickname}` });
+        }
+
+        if (!user.profile.isPublic && (!req.user || req.user.userId !== user._id.toString())) {
+            logger.warn(`Unauthorized access attempt to private profile: ${decodedNickname} by user: ${req.user?.userId || 'anonymous'}`);
+            return res.status(403).json({ error: 'Profile is private', loginRequired: true });
+        }
 
         const doc = new jsPDF();
         doc.setFontSize(20);
@@ -1274,6 +2000,7 @@ app.get('/api/profile/pdf/:nickname', async (req, res) => {
         doc.setFontSize(12);
         doc.text('Portfolio Resume', 10, 30, { align: 'center' });
 
+        // Add avatar image
         if (user.profile.avatar) {
             try {
                 const imageResponse = await axios.get(user.profile.avatar, { responseType: 'arraybuffer' });
@@ -1302,7 +2029,7 @@ app.get('/api/profile/pdf/:nickname', async (req, res) => {
             ],
             theme: 'striped',
             styles: { fontSize: 10, overflow: 'linebreak' },
-            columnStyles: { 0: { cellWidth: 50 }, 1: { cellWidth: 130 } }
+            columnStyles: { 0: { cellWidth: 50 }, 1: { cellWidth: 130 } },
         });
 
         // Social Links
@@ -1317,14 +2044,14 @@ app.get('/api/profile/pdf/:nickname', async (req, res) => {
             ],
             theme: 'striped',
             styles: { fontSize: 10 },
-            columnStyles: { 0: { cellWidth: 50 }, 1: { cellWidth: 130 } }
+            columnStyles: { 0: { cellWidth: 50 }, 1: { cellWidth: 130 } },
         });
 
         // Education
         const educationData = user.profile.education.slice(0, 50).map(edu => [
             edu.degree || 'Not specified',
             edu.institution || 'Not specified',
-            edu.year || 'Not specified'
+            edu.year || 'Not specified',
         ]);
         if (educationData.length > 0) {
             doc.autoTable({
@@ -1333,7 +2060,7 @@ app.get('/api/profile/pdf/:nickname', async (req, res) => {
                 body: educationData,
                 theme: 'striped',
                 styles: { fontSize: 10 },
-                columnStyles: { 0: { cellWidth: 60 }, 1: { cellWidth: 80 }, 2: { cellWidth: 40 } }
+                columnStyles: { 0: { cellWidth: 60 }, 1: { cellWidth: 80 }, 2: { cellWidth: 40 } },
             });
         }
 
@@ -1341,7 +2068,7 @@ app.get('/api/profile/pdf/:nickname', async (req, res) => {
         const experienceData = user.profile.experience.slice(0, 50).map(exp => [
             exp.role || 'Not specified',
             exp.company || 'Not specified',
-            exp.duration || 'Not specified'
+            exp.duration || 'Not specified',
         ]);
         if (experienceData.length > 0) {
             doc.autoTable({
@@ -1350,7 +2077,7 @@ app.get('/api/profile/pdf/:nickname', async (req, res) => {
                 body: experienceData,
                 theme: 'striped',
                 styles: { fontSize: 10 },
-                columnStyles: { 0: { cellWidth: 60 }, 1: { cellWidth: 80 }, 2: { cellWidth: 40 } }
+                columnStyles: { 0: { cellWidth: 60 }, 1: { cellWidth: 80 }, 2: { cellWidth: 40 } },
             });
         }
 
@@ -1358,7 +2085,7 @@ app.get('/api/profile/pdf/:nickname', async (req, res) => {
         const certificateData = user.profile.certificates.slice(0, 50).map(cert => [
             cert.name || 'Not specified',
             cert.issuer || 'Not specified',
-            cert.year || 'Not specified'
+            cert.year || 'Not specified',
         ]);
         if (certificateData.length > 0) {
             doc.autoTable({
@@ -1367,14 +2094,14 @@ app.get('/api/profile/pdf/:nickname', async (req, res) => {
                 body: certificateData,
                 theme: 'striped',
                 styles: { fontSize: 10 },
-                columnStyles: { 0: { cellWidth: 60 }, 1: { cellWidth: 80 }, 2: { cellWidth: 40 } }
+                columnStyles: { 0: { cellWidth: 60 }, 1: { cellWidth: 80 }, 2: { cellWidth: 40 } },
             });
         }
 
         // Skills
         const skillData = user.profile.skills.slice(0, 50).map(skill => [
             skill.name || 'Not specified',
-            `${skill.percentage}%` || '0%'
+            `${skill.percentage}%` || '0%',
         ]);
         if (skillData.length > 0) {
             doc.autoTable({
@@ -1383,14 +2110,14 @@ app.get('/api/profile/pdf/:nickname', async (req, res) => {
                 body: skillData,
                 theme: 'striped',
                 styles: { fontSize: 10 },
-                columnStyles: { 0: { cellWidth: 100 }, 1: { cellWidth: 80 } }
+                columnStyles: { 0: { cellWidth: 100 }, 1: { cellWidth: 80 } },
             });
         }
 
         // Projects
         const projectData = user.profile.projects.slice(0, 50).map(project => [
             project.title || 'Not specified',
-            project.description || 'Not specified'
+            project.description || 'Not specified',
         ]);
         if (projectData.length > 0) {
             doc.autoTable({
@@ -1399,7 +2126,7 @@ app.get('/api/profile/pdf/:nickname', async (req, res) => {
                 body: projectData,
                 theme: 'striped',
                 styles: { fontSize: 10 },
-                columnStyles: { 0: { cellWidth: 60 }, 1: { cellWidth: 120 } }
+                columnStyles: { 0: { cellWidth: 60 }, 1: { cellWidth: 120 } },
             });
         }
 
@@ -1412,13 +2139,36 @@ app.get('/api/profile/pdf/:nickname', async (req, res) => {
                 body: interestData,
                 theme: 'striped',
                 styles: { fontSize: 10 },
-                columnStyles: { 0: { cellWidth: 180 } }
+                columnStyles: { 0: { cellWidth: 180 } },
             });
         }
 
         // Footer
         doc.setFontSize(8);
         doc.text(`Generated on ${new Date().toLocaleDateString()}`, 10, doc.internal.pageSize.height - 10);
+
+        // Track CV download in Google Analytics
+        try {
+            await axios.post('https://www.google-analytics.com/mp/collect', {
+                measurement_id: process.env.GOOGLE_ANALYTICS_ID,
+                api_secret: process.env.GOOGLE_ANALYTICS_API_SECRET,
+                events: [{
+                    name: 'download_cv',
+                    params: {
+                        nickname: decodedNickname,
+                        userId: req.user?.userId || 'anonymous',
+                        timestamp: new Date().toISOString(),
+                    },
+                }],
+            }, {
+                headers: { 'Content-Type': 'application/json' },
+                timeout: 5000,
+            });
+            logger.info(`CV download tracked for ${decodedNickname}`);
+        } catch (analyticsError) {
+            logger.error(`Failed to track CV download: ${analyticsError.message}`);
+            Sentry.captureException(analyticsError);
+        }
 
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', `attachment; filename=${(user.profile.nickname || user.username).replace(/[^a-zA-Z0-9]/g, '_')}_resume.pdf`);
@@ -1427,6 +2177,240 @@ app.get('/api/profile/pdf/:nickname', async (req, res) => {
         logger.error(`Error generating PDF for ${req.params.nickname}: ${error.message}`);
         Sentry.captureException(error);
         res.status(500).json({ error: 'Failed to generate PDF: ' + error.message });
+    }
+});
+
+
+
+const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType } = require('docx');
+
+app.get('/api/profile/docx/:nickname', authenticateToken, async (req, res) => {
+    try {
+        const decodedNickname = decodeURIComponent(req.params.nickname);
+        const user = await User.findOne({
+            $or: [
+                { 'profile.nickname': decodedNickname },
+                { username: decodedNickname },
+            ],
+        });
+
+        if (!user) {
+            logger.warn(`Profile not found for nickname: ${decodedNickname}`);
+            return res.status(404).json({ error: `Profile not found for nickname: ${decodedNickname}` });
+        }
+
+        if (!user.profile.isPublic && (!req.user || req.user.userId !== user._id.toString())) {
+            logger.warn(`Unauthorized access attempt to private profile: ${decodedNickname} by user: ${req.user?.userId || 'anonymous'}`);
+            return res.status(403).json({ error: 'Profile is private', loginRequired: true });
+        }
+
+        const doc = new Document({
+            sections: [{
+                properties: {},
+                children: [
+                    new Paragraph({
+                        children: [
+                            new TextRun({
+                                text: user.profile.nickname || user.username,
+                                bold: true,
+                                size: 40,
+                            }),
+                        ],
+                    }),
+                    new Paragraph({
+                        children: [
+                            new TextRun({
+                                text: user.profile.jobTitle || 'Not specified',
+                                size: 28,
+                            }),
+                        ],
+                    }),
+                    new Paragraph({ text: '' }), // Spacer
+                    user.profile.bio ? new Paragraph({
+                        children: [new TextRun({ text: 'Bio:', bold: true, size: 24 })],
+                    }) : null,
+                    user.profile.bio ? new Paragraph({
+                        children: [new TextRun({ text: user.profile.bio, size: 20 })],
+                    }) : null,
+                    new Paragraph({ text: '' }),
+                    new Paragraph({
+                        children: [new TextRun({ text: 'Contact:', bold: true, size: 24 })],
+                    }),
+                    user.profile.phone ? new Paragraph({
+                        children: [new TextRun({ text: `Phone: ${user.profile.phone}`, size: 20 })],
+                    }) : null,
+                    ...Object.keys(user.profile.socialLinks).map(key => user.profile.socialLinks[key] ? new Paragraph({
+                        children: [new TextRun({ text: `${key}: ${user.profile.socialLinks[key]}`, size: 20 })],
+                    }) : null),
+                    new Paragraph({ text: '' }),
+                    // Education
+                    user.profile.education.length > 0 ? new Paragraph({
+                        children: [new TextRun({ text: 'Education:', bold: true, size: 24 })],
+                    }) : null,
+                    user.profile.education.length > 0 ? new Table({
+                        width: { size: 100, type: WidthType.PERCENTAGE },
+                        rows: [
+                            new TableRow({
+                                children: [
+                                    new TableCell({ children: [new Paragraph('Institution')], margins: { top: 100, bottom: 100 } }),
+                                    new TableCell({ children: [new Paragraph('Degree')], margins: { top: 100, bottom: 100 } }),
+                                    new TableCell({ children: [new Paragraph('Year')], margins: { top: 100, bottom: 100 } }),
+                                ],
+                            }),
+                            ...user.profile.education.slice(0, 50).map(edu => new TableRow({
+                                children: [
+                                    new TableCell({ children: [new Paragraph(edu.institution || 'Not specified')] }),
+                                    new TableCell({ children: [new Paragraph(edu.degree || 'Not specified')] }),
+                                    new TableCell({ children: [new Paragraph(edu.year || 'Not specified')] }),
+                                ],
+                            })),
+                        ],
+                    }) : null,
+                    // Experience
+                    user.profile.experience.length > 0 ? new Paragraph({
+                        children: [new TextRun({ text: 'Experience:', bold: true, size: 24 })],
+                    }) : null,
+                    user.profile.experience.length > 0 ? new Table({
+                        width: { size: 100, type: WidthType.PERCENTAGE },
+                        rows: [
+                            new TableRow({
+                                children: [
+                                    new TableCell({ children: [new Paragraph('Role')], margins: { top: 100, bottom: 100 } }),
+                                    new TableCell({ children: [new Paragraph('Company')], margins: { top: 100, bottom: 100 } }),
+                                    new TableCell({ children: [new Paragraph('Duration')], margins: { top: 100, bottom: 100 } }),
+                                ],
+                            }),
+                            ...user.profile.experience.slice(0, 50).map(exp => new TableRow({
+                                children: [
+                                    new TableCell({ children: [new Paragraph(exp.role || 'Not specified')] }),
+                                    new TableCell({ children: [new Paragraph(exp.company || 'Not specified')] }),
+                                    new TableCell({ children: [new Paragraph(exp.duration || 'Not specified')] }),
+                                ],
+                            })),
+                        ],
+                    }) : null,
+                    // Certificates
+                    user.profile.certificates.length > 0 ? new Paragraph({
+                        children: [new TextRun({ text: 'Certificates:', bold: true, size: 24 })],
+                    }) : null,
+                    user.profile.certificates.length > 0 ? new Table({
+                        width: { size: 100, type: WidthType.PERCENTAGE },
+                        rows: [
+                            new TableRow({
+                                children: [
+                                    new TableCell({ children: [new Paragraph('Name')], margins: { top: 100, bottom: 100 } }),
+                                    new TableCell({ children: [new Paragraph('Issuer')], margins: { top: 100, bottom: 100 } }),
+                                    new TableCell({ children: [new Paragraph('Year')], margins: { top: 100, bottom: 100 } }),
+                                ],
+                            }),
+                            ...user.profile.certificates.slice(0, 50).map(cert => new TableRow({
+                                children: [
+                                    new TableCell({ children: [new Paragraph(cert.name || 'Not specified')] }),
+                                    new TableCell({ children: [new Paragraph(cert.issuer || 'Not specified')] }),
+                                    new TableCell({ children: [new Paragraph(cert.year || 'Not specified')] }),
+                                ],
+                            })),
+                        ],
+                    }) : null,
+                    // Skills
+                    user.profile.skills.length > 0 ? new Paragraph({
+                        children: [new TextRun({ text: 'Skills:', bold: true, size: 24 })],
+                    }) : null,
+                    user.profile.skills.length > 0 ? new Table({
+                        width: { size: 100, type: WidthType.PERCENTAGE },
+                        rows: [
+                            new TableRow({
+                                children: [
+                                    new TableCell({ children: [new Paragraph('Skill')], margins: { top: 100, bottom: 100 } }),
+                                    new TableCell({ children: [new Paragraph('Proficiency')], margins: { top: 100, bottom: 100 } }),
+                                ],
+                            }),
+                            ...user.profile.skills.slice(0, 50).map(skill => new TableRow({
+                                children: [
+                                    new TableCell({ children: [new Paragraph(skill.name || 'Not specified')] }),
+                                    new TableCell({ children: [new Paragraph(`${skill.percentage}%` || '0%')] }),
+                                ],
+                            })),
+                        ],
+                    }) : null,
+                    // Projects
+                    user.profile.projects.length > 0 ? new Paragraph({
+                        children: [new TextRun({ text: 'Projects:', bold: true, size: 24 })],
+                    }) : null,
+                    user.profile.projects.length > 0 ? new Table({
+                        width: { size: 100, type: WidthType.PERCENTAGE },
+                        rows: [
+                            new TableRow({
+                                children: [
+                                    new TableCell({ children: [new Paragraph('Title')], margins: { top: 100, bottom: 100 } }),
+                                    new TableCell({ children: [new Paragraph('Description')], margins: { top: 100, bottom: 100 } }),
+                                    new TableCell({ children: [new Paragraph('Links')], margins: { top: 100, bottom: 100 } }),
+                                ],
+                            }),
+                            ...user.profile.projects.slice(0, 50).map(proj => new TableRow({
+                                children: [
+                                    new TableCell({ children: [new Paragraph(proj.title || 'Not specified')] }),
+                                    new TableCell({ children: [new Paragraph(proj.description || 'Not specified')] }),
+                                    new TableCell({ children: [new Paragraph(proj.links?.map(link => `${link.option}: ${link.value}`).join(', ') || 'Not specified')] }),
+                                ],
+                            })),
+                        ],
+                    }) : null,
+                    // Interests
+                    user.profile.interests.length > 0 ? new Paragraph({
+                        children: [new TextRun({ text: 'Interests:', bold: true, size: 24 })],
+                    }) : null,
+                    user.profile.interests.length > 0 ? new Table({
+                        width: { size: 100, type: WidthType.PERCENTAGE },
+                        rows: [
+                            new TableRow({
+                                children: [
+                                    new TableCell({ children: [new Paragraph('Interests')], margins: { top: 100, bottom: 100 } }),
+                                ],
+                            }),
+                            ...user.profile.interests.slice(0, 50).map(interest => new TableRow({
+                                children: [
+                                    new TableCell({ children: [new Paragraph(interest || 'Not specified')] }),
+                                ],
+                            })),
+                        ],
+                    }) : null,
+                ].filter(Boolean),
+            }],
+        });
+
+        const buffer = await Packer.toBuffer(doc);
+
+        // Track CV download in Google Analytics
+        try {
+            await axios.post('https://www.google-analytics.com/mp/collect', {
+                measurement_id: process.env.GOOGLE_ANALYTICS_ID,
+                api_secret: process.env.GOOGLE_ANALYTICS_API_SECRET,
+                events: [{
+                    name: 'download_cv_docx',
+                    params: {
+                        nickname: decodedNickname,
+                        userId: req.user?.userId || 'anonymous',
+                        timestamp: new Date().toISOString(),
+                    },
+                }],
+            }, {
+                headers: { 'Content-Type': 'application/json' },
+                timeout: 5000,
+            });
+            logger.info(`DOCX CV download tracked for ${decodedNickname}`);
+        } catch (analyticsError) {
+            logger.error(`Failed to track DOCX CV download: ${analyticsError.message}`);
+            Sentry.captureException(analyticsError);
+        }
+
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+        res.setHeader('Content-Disposition', `attachment; filename=${(user.profile.nickname || user.username).replace(/[^a-zA-Z0-9]/g, '_')}_resume.docx`);
+        res.send(buffer);
+    } catch (error) {
+        logger.error(`Error generating DOCX for ${req.params.nickname}: ${error.message}`);
+        Sentry.captureException(error);
+        res.status(500).json({ error: 'Failed to generate DOCX: ' + error.message });
     }
 });
 
@@ -1509,6 +2493,24 @@ app.get('/api/health', async (req, res) => {
     Sentry.captureException(error);
     res.status(500).json({ error: 'Server error', details: error.message });
   }
+});
+
+
+app.post('/api/subscribe', authenticateToken, async (req, res) => {
+    try {
+        const subscription = req.body;
+        const user = await User.findById(req.user.userId);
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        user.notifications.push(subscription);
+        await user.save();
+        res.status(201).json({ message: 'Subscription saved' });
+    } catch (error) {
+        logger.error(`Error saving subscription: ${error.message}`);
+        Sentry.captureException(error);
+        res.status(500).json({ error: 'Failed to save subscription' });
+    }
 });
 
 app.get('/api/users/search', async (req, res) => {
@@ -1655,6 +2657,9 @@ app.get('/api/conversations/export', authenticateToken, isAdmin, async (req, res
     }
 });
 
+
+//MARK_AI
+
 app.get('/api/github-projects', async (req, res) => {
     try {
         const response = await axios.get('https://api.github.com/users/Mark-Lasfar/repos', {
@@ -1663,6 +2668,37 @@ app.get('/api/github-projects', async (req, res) => {
         res.json(response.data);
     } catch (error) {
         res.status(500).json({ error: 'Failed to fetch GitHub projects' });
+    }
+});
+
+
+
+//User
+
+app.get('/api/github/repos', authenticateToken, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.userId);
+        if (!user.githubAccessToken) {
+            return res.status(400).json({ error: 'GitHub account not linked' });
+        }
+
+        const response = await axios.get('https://api.github.com/user/repos', {
+            headers: { Authorization: `Bearer ${user.githubAccessToken}` }
+        });
+
+        const repos = response.data.map(repo => ({
+            id: repo.id,
+            name: repo.name,
+            description: repo.description || 'No description provided',
+            url: repo.html_url,
+            image: repo.owner.avatar_url // Use owner avatar as a fallback image
+        }));
+
+        res.json(repos);
+    } catch (error) {
+        logger.error(`Error fetching GitHub repos: ${error.message}`);
+        Sentry.captureException(error);
+        res.status(500).json({ error: 'Failed to fetch GitHub repositories' });
     }
 });
 
