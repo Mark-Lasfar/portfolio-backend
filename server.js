@@ -13,6 +13,7 @@ const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const cloudinary = require('cloudinary').v2;
 const multer = require('multer');
 const { jsPDF } = require('jspdf');
+const Jimp = require('jimp');
 require('jspdf-autotable');
 require('dotenv').config();
 const winston = require('winston');
@@ -242,9 +243,9 @@ const transporter = nodemailer.createTransport({
 const projectSchema = new mongoose.Schema({
     title: { type: String, required: true },
     description: { type: String, required: true },
-    image: { type: String, required: true },
-    rating: { type: String, required: true },
-    stars: { type: Number, required: true },
+    image: { type: String }, // جعل الصورة اختيارية
+    rating: { type: String }, // جعل التقييم اختياري
+    stars: { type: Number }, // جعل النجوم اختياري
     links: [{ option: String, value: String, isPrivate: { type: Boolean, default: false } }],
 });
 const Project = mongoose.model('Project', projectSchema);
@@ -457,6 +458,20 @@ app.get('/auth/github/callback', passport.authenticate('github', { session: fals
     } catch (error) {
         logger.error(`GitHub callback error for ${req.user.email}: ${error.message}`);
         res.status(500).redirect(`${process.env.WEB_URL}/login.html?error=${encodeURIComponent('Authentication failed')}`);
+    }
+});
+
+app.post('/api/notifications/subscribe', authenticateToken, async (req, res) => {
+    try {
+        const subscription = req.body;
+        const user = await User.findById(req.user.userId);
+        user.notifications.push(subscription);
+        await user.save();
+        res.json({ message: 'Subscription added successfully' });
+    } catch (error) {
+        logger.error(`Error subscribing to notifications: ${error.message}`);
+        Sentry.captureException(error);
+        res.status(500).json({ error: 'Failed to subscribe to notifications' });
     }
 });
 
@@ -680,6 +695,7 @@ app.post('/api/refresh-token', async (req, res) => {
     }
 });
 
+
 // app.get('/auth/canva', (req, res) => {
 //     const authUrl = `https://api.canva.com/v1/oauth/authorize?client_id=${process.env.CANVA_CLIENT_ID}&redirect_uri=${encodeURIComponent(process.env.BASE_URL + '/auth/canva/callback')}&response_type=code&scope=design:read,design:write,asset:private:read,asset:private:write`;
 //     res.redirect(authUrl);
@@ -732,7 +748,7 @@ app.get('/api/test-sentry', (req, res) => {
     const error = new Error('Test Sentry error');
     throw error; // Will be caught by error handler and sent to Sentry
 });
-
+ 
 
 
 
@@ -1240,6 +1256,17 @@ const projects = await Project.find().select('title description image rating sta
     }
 });
 
+app.get('/api/projects/:userId', authenticateToken, async (req, res) => {
+  try {
+    const projects = await Project.find({ userId: req.params.userId })
+      .select('title description image rating stars links');
+    res.json(projects);
+  } catch (error) {
+    logger.error(`Error fetching projects for user ${req.params.userId}: ${error.message}`);
+    Sentry.captureException(error);
+    res.status(500).json({ error: 'Failed to fetch projects: ' + error.message });
+  }
+});
 
 function isAdmin(req, res, next) {
     if (!req.user.isAdmin) {
@@ -1499,6 +1526,62 @@ app.delete('/api/skills/:skillId', authenticateToken, isAdmin, async (req, res) 
         logger.error(`Error deleting skill ${skillId}: ${error.message}`);
         Sentry.captureException(error);
         res.status(500).json({ error: 'Failed to delete skill: ' + error.message });
+    }
+});
+
+
+
+app.get('/api/profile/me', authenticateToken, async (req, res) => {
+    try {
+        // استرجاع بيانات المستخدم بناءً على userId من التوكن
+        const user = await User.findById(req.user.userId).select('username profile');
+        if (!user) {
+            logger.warn(`User not found: ${req.user.userId}`);
+            return res.status(404).json({ error: 'المستخدم غير موجود' });
+        }
+
+        // التحقق من وجود ملف شخصي، وإلا إرجاع قيم افتراضية
+        const profile = user.profile || {
+            portfolioName: 'Portfolio',
+            nickname: '',
+            jobTitle: '',
+            bio: '',
+            phone: '',
+            isPublic: false,
+            socialLinks: { linkedin: '', behance: '', github: '', whatsapp: '' },
+            avatar: '',
+            avatarDisplayType: 'normal',
+            svgColor: '#000000',
+            pdfFormat: 'jspdf',
+            education: [],
+            experience: [],
+            certificates: [],
+            skills: [],
+            projects: [],
+            interests: []
+        };
+
+        // التحقق من وجود شفافية في الصورة الشخصية (إذا كانت موجودة)
+        let hasTransparency = false;
+        if (user.profile && user.profile.avatar) {
+            try {
+                const response = await axios.get(user.profile.avatar, { responseType: 'arraybuffer' });
+                const img = await Jimp.read(Buffer.from(response.data));
+                hasTransparency = img.hasAlpha();
+            } catch (error) {
+                logger.error(`Error checking avatar transparency for user ${req.user.userId}: ${error.message}`);
+            }
+        }
+
+        // إرجاع البيانات مع حالة الشفافية
+        res.json({
+            username: user.username,
+            profile,
+            hasTransparency
+        });
+    } catch (error) {
+        logger.error(`Error fetching profile for user ${req.user.userId}: ${error.message}`);
+        res.status(500).json({ error: 'خطأ في استرجاع الملف الشخصي' });
     }
 });
 
