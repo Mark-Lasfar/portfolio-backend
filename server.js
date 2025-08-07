@@ -310,6 +310,8 @@ const userSchema = new mongoose.Schema({
         portfolioName: { type: String, default: 'Portfolio' }
     }
 });
+userSchema.index({ 'profile.nickname': 1 }, { unique: true, sparse: true });
+userSchema.index({ email: 1 }, { unique: true });
 const User = mongoose.model('User', userSchema);
 
 const skillSchema = new mongoose.Schema({
@@ -1533,14 +1535,13 @@ app.delete('/api/skills/:skillId', authenticateToken, isAdmin, async (req, res) 
 
 app.get('/api/profile/me', authenticateToken, async (req, res) => {
     try {
-        // استرجاع بيانات المستخدم بناءً على userId من التوكن
         const user = await User.findById(req.user.userId).select('username profile');
         if (!user) {
             logger.warn(`User not found: ${req.user.userId}`);
             return res.status(404).json({ error: 'المستخدم غير موجود' });
         }
 
-        // التحقق من وجود ملف شخصي، وإلا إرجاع قيم افتراضية
+        // إعداد الملف الشخصي الافتراضي
         const profile = user.profile || {
             portfolioName: 'Portfolio',
             nickname: '',
@@ -1561,26 +1562,14 @@ app.get('/api/profile/me', authenticateToken, async (req, res) => {
             interests: []
         };
 
-        // التحقق من وجود شفافية في الصورة الشخصية (إذا كانت موجودة)
-        let hasTransparency = false;
-        if (user.profile && user.profile.avatar) {
-            try {
-                const response = await axios.get(user.profile.avatar, { responseType: 'arraybuffer' });
-                const img = await Jimp.read(Buffer.from(response.data));
-                hasTransparency = img.hasAlpha();
-            } catch (error) {
-                logger.error(`Error checking avatar transparency for user ${req.user.userId}: ${error.message}`);
-            }
-        }
-
-        // إرجاع البيانات مع حالة الشفافية
+        // إزالة التحقق من الشفافية لأن الـ frontend مش بيستخدمها
         res.json({
             username: user.username,
-            profile,
-            hasTransparency
+            profile
         });
     } catch (error) {
         logger.error(`Error fetching profile for user ${req.user.userId}: ${error.message}`);
+        Sentry.captureException(error);
         res.status(500).json({ error: 'خطأ في استرجاع الملف الشخصي' });
     }
 });
@@ -1591,14 +1580,14 @@ app.get('/api/profile/:nickname', async (req, res) => {
         const decodedNickname = decodeURIComponent(req.params.nickname);
         const user = await User.findOne({
             $or: [
-                { 'profile.nickname': decodedNickname },
-                { username: decodedNickname },
+                { 'profile.nickname': { $regex: `^${decodedNickname}$`, $options: 'i' } }, // Case-insensitive
+                { username: { $regex: `^${decodedNickname}$`, $options: 'i' } },
             ],
         }).select('username profile notifications');
 
         if (!user) {
             logger.warn(`Profile not found for nickname: ${decodedNickname}`);
-            return res.status(404).json({ error: `Profile not found for nickname: ${decodedNickname}` });
+            return res.status(404).json({ error: `Profile not found for ${decodedNickname}` });
         }
 
         // Check privacy settings
@@ -1608,38 +1597,43 @@ app.get('/api/profile/:nickname', async (req, res) => {
         }
 
         // Track profile view with Google Analytics
-        try {
-            await axios.post('https://www.google-analytics.com/mp/collect', {
-                measurement_id: process.env.GOOGLE_ANALYTICS_ID,
-                api_secret: process.env.GOOGLE_ANALYTICS_API_SECRET,
-                events: [{
-                    name: 'view_profile',
-                    params: {
-                        nickname: decodedNickname,
-                        userId: req.user?.userId || 'anonymous',
-                        timestamp: new Date().toISOString(),
-                    },
-                }],
-            }, {
-                headers: { 'Content-Type': 'application/json' },
-                timeout: 5000,
-            });
-            logger.info(`Profile view tracked for ${decodedNickname}`);
-        } catch (analyticsError) {
-            logger.error(`Failed to track profile view for ${decodedNickname}: ${analyticsError.message}`);
-            Sentry.captureException(analyticsError);
+        if (process.env.GOOGLE_ANALYTICS_ID && process.env.GOOGLE_ANALYTICS_API_SECRET) {
+            try {
+                await axios.post('https://www.google-analytics.com/mp/collect', {
+                    measurement_id: process.env.GOOGLE_ANALYTICS_ID,
+                    api_secret: process.env.GOOGLE_ANALYTICS_API_SECRET,
+                    events: [{
+                        name: 'view_profile',
+                        params: {
+                            nickname: decodedNickname,
+                            userId: req.user?.userId || 'anonymous',
+                            timestamp: new Date().toISOString(),
+                        },
+                    }],
+                }, {
+                    headers: { 'Content-Type': 'application/json' },
+                    timeout: 5000,
+                });
+                logger.info(`Profile view tracked for ${decodedNickname}`);
+            } catch (analyticsError) {
+                logger.error(`Failed to track profile view for ${decodedNickname}: ${analyticsError.message}`);
+                Sentry.captureException(analyticsError);
+            }
         }
 
         // Send push notification to profile owner
-        if (user.notifications && user.notifications.length > 0 && req.user?.userId !== user._id.toString()) {
+        if (user.notifications?.length > 0 && req.user?.userId !== user._id.toString()) {
             try {
-                const subscription = user.notifications[0]; // Assuming notifications store push subscriptions
-                const payload = JSON.stringify({
-                    title: 'Profile Viewed',
-                    body: `Your profile (${decodedNickname}) was viewed by ${req.user?.userId || 'an anonymous user'}.`,
-                });
-                await webpush.sendNotification(subscription, payload);
-                logger.info(`Push notification sent to ${user._id} for profile view`);
+                const subscription = user.notifications[0];
+                // Validate subscription object
+                if (subscription.endpoint && subscription.keys?.p256dh && subscription.keys?.auth) {
+                    const payload = JSON.stringify({
+                        title: 'Profile Viewed',
+                        body: `Your profile (${decodedNickname}) was viewed by ${req.user?.username || 'an anonymous user'}.`,
+                    });
+                    await webpush.sendNotification(subscription, payload);
+                    logger.info(`Push notification sent to ${user._id} for profile view`);
+                }
             } catch (pushError) {
                 logger.error(`Failed to send push notification: ${pushError.message}`);
                 Sentry.captureException(pushError);
@@ -1650,9 +1644,9 @@ app.get('/api/profile/:nickname', async (req, res) => {
         const response = {
             username: user.username,
             profile: {
-                nickname: user.profile.nickname,
+                nickname: user.profile.nickname || user.username,
                 portfolioName: user.profile.portfolioName || 'Portfolio',
-                avatar: user.profile.avatar,
+                avatar: user.profile.avatar || '/assets/img/default-avatar.png',
                 avatarDisplayType: user.profile.avatarDisplayType || 'normal',
                 svgColor: user.profile.svgColor || '#000000',
                 jobTitle: user.profile.jobTitle || '',
@@ -1666,7 +1660,7 @@ app.get('/api/profile/:nickname', async (req, res) => {
                 skills: user.profile.skills || [],
                 projects: user.profile.projects || [],
                 pdfFormat: user.profile.pdfFormat || 'jspdf',
-                isPublic: user.profile.isPublic,
+                isPublic: user.profile.isPublic ?? true,
                 status: user.profile.status || 'Available',
             },
         };
@@ -1694,7 +1688,6 @@ app.use('/api/google', googleLimiter);
 app.get('/api/check-nickname', authenticateToken, [
     body('nickname').isLength({ min: 3 }).withMessage('Nickname must be at least 3 characters long'),
 ], async (req, res) => {
-    userSchema.index({ 'profile.nickname': 1 }, { unique: true, sparse: true });
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
         return res.status(400).json({ errors: errors.array() });
@@ -1705,7 +1698,10 @@ app.get('/api/check-nickname', authenticateToken, [
         if (!nickname) {
             return res.status(400).json({ error: 'Nickname is required' });
         }
-        const user = await User.findOne({ 'profile.nickname': nickname, _id: { $ne: req.user.userId } });
+        const user = await User.findOne({ 
+            'profile.nickname': { $regex: `^${nickname}$`, $options: 'i' }, 
+            _id: { $ne: req.user.userId } 
+        });
         res.json({ available: !user });
     } catch (error) {
         logger.error(`Error checking nickname: ${error.message}`);
