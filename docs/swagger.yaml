@@ -1429,6 +1429,42 @@ paths:
       responses:
         '302':
           description: Redirect to Facebook authentication
+          /api/revoke-token:
+  post:
+    summary: Revoke a specific refresh token
+    tags: [Authentication]
+    security:
+      - bearerAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              refreshToken:
+                type: string
+                description: The refresh token to revoke
+            required:
+              - refreshToken
+    responses:
+      200:
+        description: Refresh token revoked successfully
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                success:
+                  type: boolean
+                message:
+                  type: string
+      400:
+        description: Invalid request
+      401:
+        description: Unauthorized
+      500:
+        description: Server error
   /auth/github:
     get:
       summary: Initiate GitHub OAuth login

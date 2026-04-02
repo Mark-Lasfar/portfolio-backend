@@ -12,11 +12,36 @@ const axios = require('axios');
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const cloudinary = require('cloudinary').v2;
 const multer = require('multer');
+const MGZonStrategy = require('passport-mgzon');
 const { jsPDF } = require('jspdf');
 const Jimp = require('jimp');
+
 require('jspdf-autotable');
 require('dotenv').config();
+
 const winston = require('winston');
+
+// ✅ انقل تعريف logger هنا (قبل استخدامه)
+const logger = winston.createLogger({
+    level: 'info',
+    format: winston.format.combine(
+        winston.format.timestamp(),
+        winston.format.json()
+    ),
+    transports: [
+        new winston.transports.Console(),
+    ]
+});
+
+// ✅ الآن logger موجود، يقدر يستخدم
+const allowedRedirectUris = process.env.ALLOWED_REDIRECT_URIS
+    ? process.env.ALLOWED_REDIRECT_URIS.split(',')
+    : [];
+if (!allowedRedirectUris.length) {
+    logger.error('ALLOWED_REDIRECT_URIS is not defined in .env');
+    process.exit(1);
+}
+
 const sharp = require('sharp');
 // const { body, validationResult } = require('express-validator');
 const swaggerJsDoc = require('swagger-jsdoc');
@@ -35,28 +60,43 @@ const cron = require('node-cron');
 const { google } = require('googleapis');
 const { Handlers } = require('@sentry/node');
 const rateLimit = require('express-rate-limit');
+const OAuth2Strategy = require('passport-oauth2').Strategy;
 // const jsPDF = require('jspdf');
 const webpush = require('web-push');
-const logger = winston.createLogger({
-    level: 'info',
-    format: winston.format.combine(
-        winston.format.timestamp(),
-        winston.format.json()
-    ),
-    transports: [
-        new winston.transports.Console(),
-    ]
-});
+
+// ❌ احذف هذا السطر لأنه مكرر (logger عرفته فوق)
+// const logger = winston.createLogger({...});
 
 
 Sentry.init({
     dsn: process.env.SENTRY_DSN,
-    tracesSampleRate: 0.0,
+    tracesSampleRate: 0.2, // تتبع 20% من الطلبات
     environment: process.env.NODE_ENV || 'development',
 });
 
 
+// Endpoint لتحديث وجلب عدد الزوار
+app.post('/api/visits', async (req, res) => {
+    try {
+        let visit = await Visit.findOne();
+        if (!visit) {
+            visit = new Visit({ count: 1930537 });
+        }
+        visit.count += 1;
+        await visit.save();
+        res.json({ visitCount: visit.count });
+    } catch (error) {
+        logger.error(`Error updating visit count: ${error.message}`);
+        Sentry.captureException(error);
+        res.status(500).json({ error: 'Failed to update visit count' });
+    }
+});
 
+
+const visitSchema = new mongoose.Schema({
+    count: { type: Number, default: 1930537 } // القيمة الابتدائية
+});
+const Visit = mongoose.model('Visit', visitSchema);
 
 
 app.use(Handlers.requestHandler());
@@ -66,10 +106,14 @@ app.use(morgan('combined', { stream: { write: message => logger.info(message.tri
 app.use(cookieParser());
 app.use(csurf({ cookie: true }));
 app.use((req, res, next) => {
-    res.locals.csrfToken = req.csrfToken();
-    logger.info(`Request: ${req.method} ${req.originalUrl} - Headers: ${JSON.stringify(req.headers)}`);
+    const start = Date.now();
+    res.on('finish', () => {
+        const duration = Date.now() - start;
+        logger.info(`Request: ${req.method} ${req.originalUrl} - ${res.statusCode} - ${duration}ms`);
+    });
     next();
 });
+
 
 app.use(compression({
     level: 6,
@@ -141,7 +185,7 @@ const swaggerOptions = {
             }
         }
     },
-    apis: ['./docs/swagger.yaml'] 
+    apis: ['./docs/swagger.yaml']
 };
 const swaggerDocs = swaggerJsDoc(swaggerOptions);
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocs));
@@ -166,7 +210,15 @@ const storage = new CloudinaryStorage({
 });
 
 const upload = multer({
-    storage,
+    storage: new CloudinaryStorage({
+        cloudinary: cloudinary,
+        params: async (req, file) => ({
+            folder: `Uploads/${req.user.userId}`,
+            allowed_formats: ['jpeg', 'png', 'pdf'],
+            resource_type: 'auto',
+            public_id: `${Date.now()}_${file.originalname}`
+        })
+    }),
     limits: { fileSize: 5 * 1024 * 1024 },
     fileFilter: (req, file, cb) => {
         const allowedTypes = ['image/jpeg', 'image/png', 'application/pdf'];
@@ -183,12 +235,12 @@ const upload = multer({
 
 
 mongoose.connect(process.env.MONGODB_URI)
-  .then(() => logger.info('Connected to MongoDB'))
-  .catch(err => {
-    logger.error(`MongoDB connection error: ${err.message}`, { stack: err.stack });
-    Sentry.captureException(err);
-    process.exit(1);
-  });
+    .then(() => logger.info('Connected to MongoDB'))
+    .catch(err => {
+        logger.error(`MongoDB connection error: ${err.message}`, { stack: err.stack });
+        Sentry.captureException(err);
+        process.exit(1);
+    });
 
 const MONGODB_URI = process.env.MONGODB_URI;
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -204,7 +256,7 @@ const EMAIL_PASS = process.env.EMAIL_PASS;
 const HUGGING_FACE_TOKEN = process.env.HUGGING_FACE_TOKEN;
 const AI_API_URL = process.env.AI_API_URL;
 
-if (!MONGODB_URI || !JWT_SECRET || !GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET || !FACEBOOK_CLIENT_ID || !FACEBOOK_CLIENT_SECRET || !GITHUB_CLIENT_ID || !GITHUB_CLIENT_SECRET || !EMAIL_USER || !EMAIL_PASS || !HUGGING_FACE_TOKEN || !process.env.WEB_URL || !process.env.BASE_URL || !process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET || !process.env.GITHUB_TOKEN || !process.env.SENTRY_DSN) {
+if (!MONGODB_URI || !JWT_SECRET || !GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET || !FACEBOOK_CLIENT_ID || !FACEBOOK_CLIENT_SECRET || !GITHUB_CLIENT_ID || !GITHUB_CLIENT_SECRET || !EMAIL_USER || !EMAIL_PASS || !HUGGING_FACE_TOKEN || !process.env.BASE_URL || !process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET || !process.env.GITHUB_TOKEN || !process.env.SENTRY_DSN) {
     logger.error('Missing environment variables');
     process.exit(1);
 }
@@ -215,15 +267,24 @@ webpush.setVapidDetails(
     process.env.VAPID_PRIVATE_KEY
 );
 
-const WEB_URL = process.env.WEB_URL;
+// const WEB_URL = process.env.WEB_URL; ماذا عن هذا 
 const BASE_URL = process.env.BASE_URL;
 
 app.use(cors({
-    origin: process.env.WEB_URL,
+    origin: (origin, callback) => {
+        const allowedOrigins = allowedRedirectUris.map(uri => uri.split('/auth/callback')[0]);
+        if (!origin || allowedOrigins.includes(origin)) {
+            callback(null, true);
+        } else {
+            logger.warn(`CORS blocked for origin: ${origin}`);
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token', 'X-New-Token', 'x-refresh-token']
 }));
+
 
 const transporter = nodemailer.createTransport({
     service: 'gmail',
@@ -247,6 +308,8 @@ const projectSchema = new mongoose.Schema({
     rating: { type: String }, // جعل التقييم اختياري
     stars: { type: Number }, // جعل النجوم اختياري
     links: [{ option: String, value: String, isPrivate: { type: Boolean, default: false } }],
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true }, // ✅ مهم للربط
+    isPublic: { type: Boolean, default: true } // ✅ أضف هذا السطر,
 });
 const Project = mongoose.model('Project', projectSchema);
 
@@ -265,7 +328,7 @@ const Comment = mongoose.model('Comment', commentSchema);
 
 const userSchema = new mongoose.Schema({
     username: { type: String, sparse: true },
-    email: { type: String, required: true, unique: true },
+    email: { type: String, required: true },
     password: { type: String },
     isAdmin: { type: Boolean, default: false },
     googleId: String,
@@ -274,19 +337,22 @@ const userSchema = new mongoose.Schema({
     facebookId: String,
     facebookAccessToken: String,
     facebookRefreshToken: String,
-    githubRefreshToken: String,
     githubId: String,
     githubAccessToken: String,
+    githubRefreshToken: String,
+    mgzonId: String,
+    mgzonAccessToken: String,
+    mgzonRefreshToken: String,
     otp: String,
     otpExpires: Date,
     refreshTokens: [{ token: String, createdAt: { type: Date, default: Date.now } }],
     notifications: [{ type: String }],
     profile: {
-        nickname: { type: String, unique: true, sparse: true },
+        nickname: { type: String,  sparse: true },
         avatar: String,
-        status:String,
+        status: { type: String, default: 'Available', enum: ['Available', 'Busy', 'Open to Work'] },
         jobTitle: String,
-        pdfFormat: { type: String, enum: ['jspdf', 'canva'], default: 'jspdf' },
+        pdfFormat: { type: String, enum: ['jspdf', 'canva', 'template1', 'template2'], default: 'jspdf' },
         bio: String,
         phone: { type: String, default: '' },
         socialLinks: {
@@ -299,20 +365,111 @@ const userSchema = new mongoose.Schema({
         experience: [{ company: String, role: String, duration: String }],
         certificates: [{ name: String, issuer: String, year: String }],
         skills: [{ name: String, percentage: Number }],
-        projects: [{ title: String, description: String, image: String, links: [{ option: String, value: String }] }],
+        projects: [
+            {
+                isPrivate: { type: Boolean, default: false },
+                title: String,
+                description: String,
+                image: String,
+                rating: String,
+                stars: { type: Number, min: 0, max: 5 },
+                isPublic: { type: Boolean, default: true },
+                links: [{ option: String, value: String }]
+            }
+        ],
+        githubRepos: [
+            {
+                id: String,
+                name: String,
+                description: String,
+                url: String,
+                image: String
+            }
+        ],
+
+        theme: {
+            id: { type: String, default: 'default' },
+            primaryColor: { type: String, default: '#3b82f6' },
+            secondaryColor: { type: String, default: '#8b5cf6' },
+            fontFamily: { type: String, default: 'Inter' },
+            borderRadius: { type: String, default: '0.5rem' },
+        },
+
+        // ✅ إضافة إعدادات التخطيط (Layout)
+        layout: {
+            type: { type: String, enum: ['grid', 'list', 'masonry'], default: 'grid' },
+            columns: { type: Number, default: 3 },
+            showProjectImages: { type: Boolean, default: true },
+            showProjectDescriptions: { type: Boolean, default: true },
+            showProjectRatings: { type: Boolean, default: true },
+            showProjectLinks: { type: Boolean, default: true },
+        },
+
+        // ✅ إضافة إعدادات الهيدر
+        header: {
+            showAvatar: { type: Boolean, default: true },
+            showJobTitle: { type: Boolean, default: true },
+            showBio: { type: Boolean, default: true },
+            showContactInfo: { type: Boolean, default: true },
+            showSocialLinks: { type: Boolean, default: true },
+            layout: { type: String, enum: ['centered', 'left-aligned'], default: 'centered' },
+        },
+
+        // ✅ إضافة إعدادات الفوتر
+        footer: {
+            showCopyright: { type: Boolean, default: true },
+            customText: { type: String, default: '' },
+        },
+
+        // ✅ إضافة إعدادات SEO
+        seo: {
+            title: { type: String, default: '' },
+            description: { type: String, default: '' },
+            keywords: { type: String, default: '' },
+            ogImage: { type: String, default: '' },
+            ogTitle: { type: String, default: '' },
+            ogDescription: { type: String, default: '' },
+            twitterCard: { type: String, enum: ['summary', 'summary_large_image', 'app', 'player'], default: 'summary_large_image' },
+            twitterSite: { type: String, default: '' },
+            canonicalUrl: { type: String, default: '' },
+            noindex: { type: Boolean, default: false },
+            nofollow: { type: Boolean, default: false },
+        },
+
+        // ✅ إضافة إعدادات Schema.org
+        schema: {
+            type: { type: String, enum: ['Person', 'Organization', 'ProfessionalService', 'LocalBusiness'], default: 'Person' },
+            name: { type: String, default: '' },
+            description: { type: String, default: '' },
+            image: { type: String, default: '' },
+            sameAs: [{ type: String }],
+            jobTitle: { type: String, default: '' },
+            worksFor: { type: String, default: '' },
+            alumniOf: [{ type: String }],
+            knowsAbout: [{ type: String }],
+        },
+        //     canvaAccessToken: String,
+        // canvaRefreshToken: String,
+
+
+
+        customFields: [{ name: String, value: String }],
         interests: [String],
         isPublic: { type: Boolean, default: true },
-        customFields: [{ key: String, value: String }],
         avatarDisplayType: { type: String, enum: ['svg', 'normal'], default: 'normal' },
         svgColor: { type: String, default: '#000000' },
-    //     canvaAccessToken: String,
-    // canvaRefreshToken: String,
-        portfolioName: { type: String, default: 'Portfolio' }
+        portfolioName: { type: String, default: 'Portfolio' },
+        pushNotifications: { type: Boolean, default: false }
     }
 });
-userSchema.index({ 'profile.nickname': 1 }, { unique: true, sparse: true });
+
+// userSchema.index({ username: 1 }, { unique: true, sparse: true });
+
+// userSchema.index({ 'profile.nickname': 1 }, { unique: true, sparse: true });
+
 userSchema.index({ email: 1 }, { unique: true });
 const User = mongoose.model('User', userSchema);
+
 
 const skillSchema = new mongoose.Schema({
     name: { type: String, required: true },
@@ -330,13 +487,44 @@ const Conversation = mongoose.model('Conversation', conversationSchema);
 
 
 
+// MGZon Strategy
+passport.use(new MGZonStrategy({
+    clientID: process.env.MGZON_CLIENT_ID,
+    clientSecret: process.env.MGZON_CLIENT_SECRET,
+    callbackURL: `${process.env.BASE_URL}/auth/mgz/callback`,
+    scope: ['profile:read', 'profile:write'],
+    passReqToCallback: true // أضف دي
+}, async (accessToken, refreshToken, profile, done) => {
+    try {
+        let user = await User.findOne({ mgzonId: profile.id });
+        if (!user) {
+            user = await User.create({
+                mgzonId: profile.id,
+                email: profile.email,
+                username: profile.name,
+                mgzonAccessToken: accessToken,
+                mgzonRefreshToken: refreshToken,
+                profile: { nickname: profile.nickname || profile.email.split('@')[0] }
+            });
+        } else {
+            user.mgzonAccessToken = accessToken;
+            if (refreshToken) user.mgzonRefreshToken = refreshToken;
+            await user.save();
+        }
+        return done(null, user);
+    } catch (error) {
+        logger.error(`MGZon strategy error: ${error.message}`);
+        return done(error, null);
+    }
+}));
 
 
 passport.use(new GoogleStrategy({
     clientID: GOOGLE_CLIENT_ID,
     clientSecret: GOOGLE_CLIENT_SECRET,
     callbackURL: `${process.env.BASE_URL}/auth/google/callback`,
-    scope: ['profile', 'email', 'https://www.googleapis.com/auth/drive.file'] // Add Drive scope
+    scope: ['profile', 'email', 'https://www.googleapis.com/auth/drive.file'], // Add Drive scope
+    passReqToCallback: true // أضف دي
 }, async (accessToken, refreshToken, profile, done) => {
     try {
         let user = await User.findOne({ googleId: profile.id });
@@ -362,23 +550,14 @@ passport.use(new GoogleStrategy({
     }
 }));
 
-app.get('/auth/google/callback', passport.authenticate('google', { session: false }), async (req, res) => {
-    try {
-        const { token, refreshToken } = await generateTokens(req.user);
-        logger.info(`Google auth callback for user: ${req.user.email}`);
-        res.redirect(`${process.env.WEB_URL}/auth/callback?token=${token}&refreshToken=${refreshToken}&provider=google`);
-    } catch (error) {
-        logger.error(`Google callback error for ${req.user.email}: ${error.message}`);
-        res.status(500).redirect(`${process.env.WEB_URL}/login.html?error=${encodeURIComponent('Authentication failed')}`);
-    }
-});
 
 passport.use(new FacebookStrategy({
     clientID: FACEBOOK_CLIENT_ID,
     clientSecret: FACEBOOK_CLIENT_SECRET,
     callbackURL: `${process.env.BASE_URL}/auth/facebook/callback`,
     profileFields: ['id', 'emails', 'displayName', 'photos', 'posts', 'friends'],
-    scope: ['email', 'public_profile', 'user_posts', 'user_likes', 'user_friends'] // Add required scopes
+    scope: ['email', 'public_profile', 'user_posts', 'user_likes', 'user_friends'],// Add required scopes
+    passReqToCallback: true // أضف دي
 }, async (accessToken, refreshToken, profile, done) => {
     try {
         let user = await User.findOne({ facebookId: profile.id });
@@ -403,22 +582,12 @@ passport.use(new FacebookStrategy({
     }
 }));
 
-app.get('/auth/facebook/callback', passport.authenticate('facebook', { session: false }), async (req, res) => {
-    try {
-        const { token, refreshToken } = await generateTokens(req.user);
-        logger.info(`Facebook auth callback for user: ${req.user.email}`);
-        res.redirect(`${process.env.WEB_URL}/auth/callback?token=${token}&refreshToken=${refreshToken}&provider=facebook`);
-    } catch (error) {
-        logger.error(`Facebook callback error for ${req.user.email}: ${error.message}`);
-        res.status(500).redirect(`${process.env.WEB_URL}/login.html?error=${encodeURIComponent('Authentication failed')}`);
-    }
-});
-
 passport.use(new GitHubStrategy({
     clientID: GITHUB_CLIENT_ID,
     clientSecret: GITHUB_CLIENT_SECRET,
     callbackURL: `${process.env.BASE_URL}/auth/github/callback`,
-    scope: ['user:email', 'repo'] // Add repo scope for repository access
+    scope: ['user:email', 'repo'], // Add repo scope for repository access
+    passReqToCallback: true
 }, async (accessToken, refreshToken, profile, done) => {
     try {
         let user = await User.findOne({ githubId: profile.id });
@@ -452,16 +621,7 @@ app.get('/api/csrf-token', (req, res) => {
     res.json({ csrfToken });
 });
 
-app.get('/auth/github/callback', passport.authenticate('github', { session: false }), async (req, res) => {
-    try {
-        const { token, refreshToken } = await generateTokens(req.user);
-        logger.info(`GitHub auth callback for user: ${req.user.email}`);
-        res.redirect(`${process.env.WEB_URL}/auth/callback?token=${token}&refreshToken=${refreshToken}&provider=github`);
-    } catch (error) {
-        logger.error(`GitHub callback error for ${req.user.email}: ${error.message}`);
-        res.status(500).redirect(`${process.env.WEB_URL}/login.html?error=${encodeURIComponent('Authentication failed')}`);
-    }
-});
+
 
 app.post('/api/notifications/subscribe', authenticateToken, async (req, res) => {
     try {
@@ -498,7 +658,6 @@ app.get('/api/facebook/posts', authenticateToken, async (req, res) => {
         } catch (error) {
             if (error.response?.status === 401 && user.facebookRefreshToken) {
                 try {
-                    // Attempt to refresh the token
                     const refreshResponse = await axios.get('https://graph.facebook.com/v20.0/oauth/access_token', {
                         params: {
                             grant_type: 'fb_exchange_token',
@@ -507,12 +666,13 @@ app.get('/api/facebook/posts', authenticateToken, async (req, res) => {
                             fb_exchange_token: user.facebookRefreshToken,
                         },
                     });
-
                     accessToken = refreshResponse.data.access_token;
+                    if (refreshResponse.data.refresh_token) {
+                        user.facebookRefreshToken = refreshResponse.data.refresh_token; // تحديث الـ refresh token
+                    }
                     user.facebookAccessToken = accessToken;
                     await user.save();
-
-                    // Retry the request with the new token
+                    // Retry the request
                     response = await axios.get('https://graph.facebook.com/v20.0/me?fields=posts{created_time,message,likes.summary(true),comments.summary(true),shares},name,email', {
                         headers: { Authorization: `Bearer ${accessToken}` },
                     });
@@ -632,7 +792,10 @@ app.post('/api/facebook/share-profile', authenticateToken, async (req, res) => {
             return res.status(400).json({ error: 'Facebook account not linked' });
         }
 
-        const profileUrl = `${process.env.WEB_URL}/profile/${user.profile.nickname || user.username}`;
+        const redirectUri = req.query.redirect_uri && allowedRedirectUris.includes(req.query.redirect_uri)
+            ? req.query.redirect_uri
+            : allowedRedirectUris[0];
+        const profileUrl = `${redirectUri.split('/auth/callback')[0]}/profile/${user.profile.nickname || user.username}`;
         const message = `Check out my portfolio: ${profileUrl}`;
 
         const response = await axios.post('https://graph.facebook.com/v20.0/me/feed', {
@@ -698,6 +861,38 @@ app.post('/api/refresh-token', async (req, res) => {
 });
 
 
+
+
+const handleAuthCallback = async (req, res, provider) => {
+    try {
+        const { token, refreshToken } = await generateTokens(req.user);
+        const redirectUri = req.query.redirect_uri;
+        const successRedirect = req.query.success_redirect || ''; // fallback إلى فارغ لو مش موجود
+
+        // التحقق من redirectUri
+        if (!redirectUri || !allowedRedirectUris.includes(redirectUri)) {
+            logger.error(`Invalid redirect_uri for ${provider}: ${redirectUri || 'none'}`);
+            Sentry.captureMessage(`Invalid redirect_uri for ${provider}`, { extra: { redirectUri, provider } });
+            return res.redirect(`${allowedRedirectUris[0]}?error=${encodeURIComponent('Invalid redirect URI')}`);
+        }
+
+        logger.info(`${provider} auth callback for user: ${req.user.email}`);
+        // بناء الرابط النهائي: نأخذ جذر redirectUri ونضيف success_redirect
+        const baseUri = redirectUri.split('/auth/callback')[0];
+        const targetPath = successRedirect || '/auth/callback';
+        return res.redirect(`${baseUri}${targetPath}?token=${token}&refreshToken=${refreshToken}&provider=${provider.toLowerCase()}`);
+    } catch (error) {
+        logger.error(`${provider} callback error for ${req.user.email}: ${error.message}`);
+        Sentry.captureException(error);
+        return res.redirect(`${allowedRedirectUris[0]}?error=${encodeURIComponent('Authentication failed')}`);
+    }
+};
+
+app.get('/auth/mgz/callback', passport.authenticate('mgzon', { session: false }), (req, res) => handleAuthCallback(req, res, 'MGZon'));
+app.get('/auth/google/callback', passport.authenticate('google', { session: false }), (req, res) => handleAuthCallback(req, res, 'Google'));
+app.get('/auth/facebook/callback', passport.authenticate('facebook', { session: false }), (req, res) => handleAuthCallback(req, res, 'Facebook'));
+app.get('/auth/github/callback', passport.authenticate('github', { session: false }), (req, res) => handleAuthCallback(req, res, 'GitHub'));
+
 // app.get('/auth/canva', (req, res) => {
 //     const authUrl = `https://api.canva.com/v1/oauth/authorize?client_id=${process.env.CANVA_CLIENT_ID}&redirect_uri=${encodeURIComponent(process.env.BASE_URL + '/auth/canva/callback')}&response_type=code&scope=design:read,design:write,asset:private:read,asset:private:write`;
 //     res.redirect(authUrl);
@@ -750,7 +945,7 @@ app.get('/api/test-sentry', (req, res) => {
     const error = new Error('Test Sentry error');
     throw error; // Will be caught by error handler and sent to Sentry
 });
- 
+
 
 
 
@@ -764,8 +959,11 @@ app.use('/api/login', loginLimiter);
 
 async function generateTokens(user) {
     user.refreshTokens = user.refreshTokens.filter(t => new Date(t.createdAt) > new Date(Date.now() - 30 * 24 * 60 * 60 * 1000));
+    if (user.refreshTokens.length >= 10) {
+        user.refreshTokens.shift(); // إزالة أقدم token لو وصلت للحد الأقصى
+    }
     const token = jwt.sign({ userId: user._id, isAdmin: user.isAdmin }, JWT_SECRET, { expiresIn: '1h' });
-    const refreshToken = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: '7d' });
+    const refreshToken = jwt.sign({ userId: user._id }, process.env.REFRESH_TOKEN_SECRET, { expiresIn: '7d' });
     user.refreshTokens.push({ token: refreshToken, createdAt: new Date() });
     await user.save();
     return { token, refreshToken };
@@ -1111,20 +1309,13 @@ app.post('/api/upload', authenticateToken, upload.single('file'), async (req, re
         if (!req.file) {
             return res.status(400).json({ error: 'No file uploaded' });
         }
-        const fileUrl = req.file.path;
         if (req.file.mimetype.startsWith('image/')) {
-            try {
-                const image = sharp(req.file.buffer);
-                const metadata = await image.metadata();
-                if (!['png', 'jpeg'].includes(metadata.format)) {
-                    return res.status(400).json({ error: 'Invalid image format. Only PNG and JPEG are allowed.' });
-                }
-            } catch (imageError) {
-                logger.error(`Error validating image: ${imageError.message}`);
-                Sentry.captureException(imageError);
-                return res.status(400).json({ error: 'Invalid image file' });
+            const image = await sharp(req.file.buffer).metadata();
+            if (!['png', 'jpeg'].includes(image.format)) {
+                return res.status(400).json({ error: 'Invalid image format. Only PNG and JPEG are allowed.' });
             }
         }
+        const fileUrl = req.file.path; // Cloudinary URL
         res.json({ message: `File uploaded successfully: ${fileUrl}` });
     } catch (error) {
         if (error instanceof multer.MulterError) {
@@ -1135,7 +1326,6 @@ app.post('/api/upload', authenticateToken, upload.single('file'), async (req, re
         res.status(400).json({ error: error.message || 'Failed to upload file' });
     }
 });
-
 app.post('/api/login', [
     body('email').isEmail().withMessage('Invalid email format'),
     body('password').notEmpty().withMessage('Password is required')
@@ -1190,8 +1380,8 @@ const resetPasswordLimiter = rateLimit({
 app.use('/api/reset-password', resetPasswordLimiter);
 app.use('/api/forgot-password', resetPasswordLimiter);
 const otpVerifyLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, 
-    max: 5, 
+    windowMs: 15 * 60 * 1000,
+    max: 5,
     message: 'Too many OTP verification attempts, please try again later.'
 });
 app.use('/api/login/verify-otp', otpVerifyLimiter);
@@ -1243,32 +1433,51 @@ app.post('/api/register', [
     }
 });
 
-app.get('/auth/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
-app.get('/auth/facebook', passport.authenticate('facebook', { scope: ['email'] }));
-app.get('/auth/github', passport.authenticate('github', { scope: ['user:email'] }));
+// app.get('/auth/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
+// app.get('/auth/facebook', passport.authenticate('facebook', { scope: ['email'] }));
+// app.get('/auth/github', passport.authenticate('github', { scope: ['user:email'] }));
 
 app.get('/api/projects', async (req, res) => {
     try {
-const projects = await Project.find().select('title description image rating stars links');
-        res.json(projects);
+        // ✅ جلب المشاريع العامة فقط (isPublic = true)
+        const projects = await Project.find({ isPublic: true })
+            .select('title description image rating stars links userId')
+            .populate('userId', 'username profile.nickname profile.avatar');
+
+        res.json({ success: true, data: projects });
     } catch (error) {
         logger.error(`Error fetching projects: ${error.message}`);
-        Sentry.captureException(error, { extra: { endpoint: '/api/projects', method: 'GET' } });
-        res.status(500).json({ error: 'Failed to fetch projects: ' + error.message });
+        Sentry.captureException(error);
+        res.status(500).json({ success: false, error: 'Failed to fetch projects' });
     }
 });
 
+// server.js - تعديل جلب مشاريع مستخدم معين
+
 app.get('/api/projects/:userId', authenticateToken, async (req, res) => {
-  try {
-    const projects = await Project.find({ userId: req.params.userId })
-      .select('title description image rating stars links');
-    res.json(projects);
-  } catch (error) {
-    logger.error(`Error fetching projects for user ${req.params.userId}: ${error.message}`);
-    Sentry.captureException(error);
-    res.status(500).json({ error: 'Failed to fetch projects: ' + error.message });
-  }
+    try {
+        const targetUserId = req.params.userId;
+        const currentUserId = req.user?.userId;
+
+        // ✅ لو المستخدم بيشوف مشاريعه هو - يشوف كل حاجة
+        // ✅ لو المستخدم بيشوف مشاريع غيره - يشوف العامة فقط
+        const filter = { userId: targetUserId };
+
+        if (targetUserId !== currentUserId) {
+            filter.isPublic = true; // غير المالك يشوف العامة فقط
+        }
+
+        const projects = await Project.find(filter)
+            .select('title description image rating stars links isPublic');
+
+        res.json(projects);
+    } catch (error) {
+        logger.error(`Error fetching projects for user ${req.params.userId}: ${error.message}`);
+        Sentry.captureException(error);
+        res.status(500).json({ error: 'Failed to fetch projects' });
+    }
 });
+
 
 function isAdmin(req, res, next) {
     if (!req.user.isAdmin) {
@@ -1282,93 +1491,178 @@ function isAdmin(req, res, next) {
     next();
 }
 
+// للسماح للمستخدمين العاديين بالانشاء 
 
 
-
-app.post('/api/projects', authenticateToken, isAdmin, [
+app.post('/api/projects', authenticateToken, [
     body('title').notEmpty().withMessage('Title is required'),
     body('description').notEmpty().withMessage('Description is required'),
-    body('image').isURL().withMessage('Image must be a valid URL'),
-    body('rating').notEmpty().withMessage('Rating is required'),
-    body('stars').isInt({ min: 0, max: 5 }).withMessage('Stars must be between 0 and 5'),
-    body('links').isArray().withMessage('Links must be an array')
+    body('image').optional().isURL().withMessage('Image must be a valid URL'),
+    body('rating').optional().notEmpty().withMessage('Rating cannot be empty'),
+    body('isPublic').optional().isBoolean().withMessage('isPublic must be a boolean'), // ✅ إضافة
+
+    body('stars').optional().isInt({ min: 0, max: 5 }).withMessage('Stars must be between 0 and 5'),
+    body('links').isArray({ min: 0 }).withMessage('Links must be an array'),
+    body('links.*.option').notEmpty().withMessage('Link option is required'),
+    body('links.*.value').isURL().withMessage('Link value must be a valid URL'),
+    body('links.*.isPrivate').optional().isBoolean().withMessage('isPrivate must be a boolean')
 ], async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-        return res.status(400).json({ errors: errors.array() });
+        return res.status(400).json({ success: false, error: errors.array().map(e => e.msg).join(', ') });
     }
     const { title, description, image, rating, stars, links } = req.body;
     try {
-        const project = new Project({ title, description, image, rating, stars, links });
+        const project = new Project({
+            title,
+            description,
+            image,
+            rating,
+            stars,
+            links,
+            userId: req.user.userId, // ربط المشروع بالمستخدم
+            isPublic: isPublic !== undefined ? isPublic : true // ✅ القيمة الافتراضية true
+
+        });
         await project.save();
-        res.status(201).json(project);
+
+        await User.findByIdAndUpdate(req.user.userId, {
+            $push: { 'profile.projects': project }
+        });
+
+
+        logger.info(`Project created by user ${req.user.userId}: ${title}`);
+        res.status(201).json({ success: true, data: project });
     } catch (error) {
         logger.error(`Error saving project: ${error.message}`);
-        Sentry.captureException(error, { user: { id: req.user.userId, email: req.user.email }, extra: { endpoint: '/api/projects', method: 'POST' } });
-        res.status(400).json({ error: 'Failed to save project: ' + error.message });
+        Sentry.captureException(error, { user: { id: req.user.userId, email: req.user.email } });
+        res.status(400).json({ success: false, error: 'Failed to save project: ' + error.message });
     }
 });
 
 
-app.put('/api/projects/:projectId', authenticateToken, isAdmin, [
-    param('projectId').isMongoId().withMessage('Invalid project ID'),
-    body('title').notEmpty().withMessage('Title is required'),
-    body('description').notEmpty().withMessage('Description is required'),
-    body('image').isURL().withMessage('Image must be a valid URL'),
-    body('rating').notEmpty().withMessage('Rating is required'),
-    body('stars').isInt({ min: 0, max: 5 }).withMessage('Stars must be between 0 and 5'),
-    body('links').isArray().withMessage('Links must be an array')
+app.put('/api/users/:userId', authenticateToken, isAdmin, [
+    param('userId').isMongoId().withMessage('Invalid user ID'),
+    body('role').isIn(['User', 'Admin']).withMessage('Role must be either User or Admin')
 ], async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-        return res.status(400).json({ errors: errors.array() });
+        return res.status(400).json({ success: false, error: errors.array().map(e => e.msg).join(', ') });
+    }
+    const { userId } = req.params;
+    const { role } = req.body;
+    try {
+        const user = await User.findByIdAndUpdate(
+            userId,
+            { role },
+            { new: true, runValidators: true }
+        ).select('username email profile role');
+        if (!user) {
+            return res.status(404).json({ success: false, error: 'User not found' });
+        }
+        res.json({ success: true, data: user });
+    } catch (error) {
+        logger.error(`Error updating user ${userId}: ${error.message}`);
+        Sentry.captureException(error);
+        res.status(400).json({ success: false, error: 'Failed to update user: ' + error.message });
+    }
+});
+
+
+app.put('/api/projects/:projectId', authenticateToken, [
+    body('title').optional().notEmpty().withMessage('Title cannot be empty'),
+    body('description').optional().notEmpty().withMessage('Description cannot be empty'),
+    body('image').optional().isURL().withMessage('Image must be a valid URL'),
+    body('isPublic').optional().isBoolean().withMessage('isPublic must be a boolean'), // ✅ إضافة
+
+    body('rating').optional().notEmpty().withMessage('Rating cannot be empty'),
+    body('stars').optional().isInt({ min: 0, max: 5 }).withMessage('Stars must be between 0 and 5'),
+    body('links').optional().isArray({ min: 0 }).withMessage('Links must be an array'),
+    body('links.*.option').optional().notEmpty().withMessage('Link option cannot be empty'),
+    body('links.*.value').optional().isURL().withMessage('Link value must be a valid URL'),
+    body('links.*.isPrivate').optional().isBoolean().withMessage('isPrivate must be a boolean')
+], async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ success: false, error: errors.array().map(e => e.msg).join(', ') });
     }
     const { projectId } = req.params;
     const { title, description, image, rating, stars, links } = req.body;
     try {
-        const project = await Project.findByIdAndUpdate(
-            projectId,
-            { title, description, image, rating, stars, links },
-            { new: true, runValidators: true }
-        );
+        const project = await Project.findById(projectId);
         if (!project) {
-            const error = new Error('Project not found');
-            Sentry.captureException(error, { user: { id: req.user.userId, email: req.user.email }, extra: { endpoint: `/api/projects/${projectId}`, method: 'PUT' } });
-            return res.status(404).json({ error: 'Project not found' });
+            return res.status(404).json({ success: false, error: 'Project not found' });
         }
-        res.json(project);
+        // التحقق من أن المستخدم هو صاحب المشروع أو أدمن
+        if (project.userId.toString() !== req.user.userId && !req.user.isAdmin) {
+            return res.status(403).json({ success: false, error: 'Unauthorized to update this project' });
+        }
+        // تحديث الحقول المرسلة فقط
+        if (title) project.title = title;
+        if (description) project.description = description;
+        if (image) project.image = image;
+        if (rating) project.rating = rating;
+        if (stars) project.stars = stars;
+        if (links) project.links = links;
+        if (isPublic !== undefined) project.isPublic = isPublic; // ✅ تحديث isPublic
+
+        await project.save();
+
+        await User.findOneAndUpdate(
+            {
+                _id: req.user.userId,
+                'profile.projects._id': projectId
+            },
+            {
+                $set: {
+                    'profile.projects.$': project
+                }
+            }
+        );
+
+
+        logger.info(`Project ${projectId} updated by user ${req.user.userId}`);
+        res.json({ success: true, data: project });
     } catch (error) {
         logger.error(`Error updating project ${projectId}: ${error.message}`);
-        Sentry.captureException(error, { user: { id: req.user.userId, email: req.user.email }, extra: { endpoint: `/api/projects/${projectId}`, method: 'PUT' } });
-        res.status(400).json({ error: 'Failed to update project: ' + error.message });
+        Sentry.captureException(error, { user: { id: req.user.userId, email: req.user.email } });
+        res.status(400).json({ success: false, error: 'Failed to update project: ' + error.message });
     }
 });
 
 
-app.delete('/api/projects/:projectId', authenticateToken, isAdmin, async (req, res) => {
+app.delete('/api/projects/:projectId', authenticateToken, async (req, res) => {
     const { projectId } = req.params;
     try {
-        await Project.findByIdAndDelete(projectId);
-        await Comment.deleteMany({ projectId });
-        res.sendStatus(204);
+        const project = await Project.findById(projectId);
+        if (!project) {
+            return res.status(404).json({ success: false, error: 'Project not found' });
+        }
+        // التحقق من أن المستخدم هو صاحب المشروع أو أدمن
+        if (project.userId.toString() !== req.user.userId && !req.user.isAdmin) {
+            return res.status(403).json({ success: false, error: 'Unauthorized to delete this project' });
+        }
+        await project.remove();
+        logger.info(`Project ${projectId} deleted by user ${req.user.userId}`);
+        res.json({ success: true, message: 'Project deleted successfully' });
     } catch (error) {
         logger.error(`Error deleting project ${projectId}: ${error.message}`);
-        Sentry.captureException(error, { user: { id: req.user.userId, email: req.user.email }, extra: { endpoint: `/api/projects/${projectId}`, method: 'DELETE' } });
-        res.status(500).json({ error: 'Failed to delete project: ' + error.message });
+        Sentry.captureException(error, { user: { id: req.user.userId, email: req.user.email } });
+        res.status(500).json({ success: false, error: 'Failed to delete project: ' + error.message });
     }
 });
 
 
 app.get('/api/comments/:projectId', async (req, res) => {
     try {
-const comments = await Comment.find({ projectId: req.params.projectId })
-    .populate('userId', 'username email')
-    .select('projectId userId rating text timestamp replies');
-        res.json(comments);
+        const comments = await Comment.find({ projectId: req.params.projectId })
+            .populate('userId', 'username email')
+            .select('projectId userId rating text timestamp replies');
+        res.json({ success: true, data: comments });
     } catch (error) {
         logger.error(`Error fetching comments for project ${req.params.projectId}: ${error.message}`);
         Sentry.captureException(error, { extra: { endpoint: `/api/comments/${req.params.projectId}`, method: 'GET' } });
-        res.status(500).json({ error: 'Failed to fetch comments: ' + error.message });
+        res.status(500).json({ success: false, error: 'Failed to fetch comments: ' + error.message });
     }
 });
 
@@ -1397,33 +1691,90 @@ app.get('/api/comments', authenticateToken, isAdmin, async (req, res) => {
                 : { username: 'Anonymous', email: '' },
             projectTitle: comment.projectId ? comment.projectId.title : 'Unknown Project'
         }));
-        res.json(sanitizedComments);
+        res.json({ success: true, data: sanitizedComments });
     } catch (error) {
         logger.error(`Error fetching comments: ${error.message}`);
         Sentry.captureException(error);
-        res.status(500).json({ error: 'Failed to load comments: ' + error.message });
+        res.status(500).json({ success: false, error: 'Failed to load comments: ' + error.message });
     }
 });
 
 
-app.post('/api/comments', authenticateToken, [
-    body('projectId').isMongoId().withMessage('Invalid project ID'),
-    body('rating').isInt({ min: 1, max: 5 }).withMessage('Rating must be between 1 and 5'),
-    body('text').notEmpty().withMessage('Comment text is required')
+app.put('/api/user/skills/:skillId', authenticateToken, [
+    body('name').optional().notEmpty().withMessage('Skill name cannot be empty'),
+    body('proficiency').optional().isInt({ min: 1, max: 100 }).withMessage('Proficiency must be between 1 and 100')
 ], async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-        return res.status(400).json({ errors: errors.array() });
+        return res.status(400).json({ success: false, error: errors.array().map(e => e.msg).join(', ') });
     }
-    const { projectId, rating, text } = req.body;
+    const { skillId } = req.params;
+    const { name, proficiency } = req.body;
     try {
-        const comment = new Comment({ projectId, userId: req.user.userId, rating, text });
+        const user = await User.findById(req.user.userId);
+        if (!user) {
+            return res.status(404).json({ success: false, error: 'User not found' });
+        }
+        const skill = user.skills.id(skillId);
+        if (!skill) {
+            return res.status(404).json({ success: false, error: 'Skill not found' });
+        }
+        if (name) skill.name = name;
+        if (proficiency) skill.proficiency = proficiency;
+        await user.save();
+        logger.info(`Skill ${skillId} updated for user ${req.user.userId}`);
+        res.json({ success: true, data: user.skills });
+    } catch (error) {
+        logger.error(`Error updating skill ${skillId} for user ${req.user.userId}: ${error.message}`);
+        Sentry.captureException(error, { user: { id: req.user.userId, email: req.user.email } });
+        res.status(400).json({ success: false, error: 'Failed to update skill: ' + error.message });
+    }
+});
+
+app.delete('/api/user/skills/:skillId', authenticateToken, async (req, res) => {
+    const { skillId } = req.params;
+    try {
+        const user = await User.findById(req.user.userId);
+        if (!user) {
+            return res.status(404).json({ success: false, error: 'User not found' });
+        }
+        const skill = user.skills.id(skillId);
+        if (!skill) {
+            return res.status(404).json({ success: false, error: 'Skill not found' });
+        }
+        skill.remove();
+        await user.save();
+        logger.info(`Skill ${skillId} deleted for user ${req.user.userId}`);
+        res.json({ success: true, message: 'Skill deleted successfully' });
+    } catch (error) {
+        logger.error(`Error deleting skill ${skillId} for user ${req.user.userId}: ${error.message}`);
+        Sentry.captureException(error, { user: { id: req.user.userId, email: req.user.email } });
+        res.status(500).json({ success: false, error: 'Failed to delete skill: ' + error.message });
+    }
+});
+
+app.post('/api/comments', authenticateToken, [
+    body('projectId').isMongoId().withMessage('Invalid project ID'),
+    body('rating').isInt({ min: 1, max: 5 }).withMessage('Rating must be between 1 and 5'),
+    body('text').notEmpty().withMessage('Comment text is required'),
+    body('replies').optional().isArray().withMessage('Replies must be an array'),
+    body('replies.*.text').optional().notEmpty().withMessage('Reply text cannot be empty'),
+    body('replies.*.timestamp').optional().isISO8601().withMessage('Reply timestamp must be a valid date')
+], async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ success: false, error: errors.array().map(e => e.msg).join(', ') });
+    }
+    const { projectId, rating, text, replies } = req.body;
+    try {
+        const comment = new Comment({ projectId, userId: req.user.userId, rating, text, replies: replies || [] });
         await comment.save();
         await sendNotification(req.user.userId, `You commented on project ${projectId}: "${text}"`);
-        res.status(201).json(comment);
+        res.status(201).json({ success: true, data: comment });
     } catch (error) {
         logger.error(`Error saving comment: ${error.message}`);
-        res.status(400).json({ error: 'Failed to save comment: ' + error.message });
+        Sentry.captureException(error);
+        res.status(400).json({ success: false, error: 'Failed to save comment: ' + error.message });
     }
 });
 
@@ -1433,7 +1784,7 @@ app.post('/api/comments/:commentId/reply', authenticateToken, isAdmin, [
 ], async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-        return res.status(400).json({ errors: errors.array() });
+        return res.status(400).json({ success: false, error: errors.array().map(e => e.msg).join(', ') });
     }
     const { commentId } = req.params;
     const { text } = req.body;
@@ -1443,13 +1794,15 @@ app.post('/api/comments/:commentId/reply', authenticateToken, isAdmin, [
             { $push: { replies: { text, timestamp: new Date() } } },
             { new: true, runValidators: true }
         ).populate('userId', 'username email');
-        if (!comment) return res.status(404).json({ error: 'Comment not found' });
+        if (!comment) {
+            return res.status(404).json({ success: false, error: 'Comment not found' });
+        }
         await sendNotification(comment.userId._id, `Admin replied to your comment: "${text}"`);
-        res.json(comment);
+        res.json({ success: true, data: comment });
     } catch (error) {
         logger.error(`Error adding reply to comment ${commentId}: ${error.message}`);
         Sentry.captureException(error);
-        res.status(400).json({ error: 'Failed to add reply: ' + error.message });
+        res.status(400).json({ success: false, error: 'Failed to add reply: ' + error.message });
     }
 });
 
@@ -1457,18 +1810,27 @@ app.post('/api/comments/:commentId/reply', authenticateToken, isAdmin, [
 app.delete('/api/comments/:commentId', authenticateToken, isAdmin, async (req, res) => {
     const { commentId } = req.params;
     try {
-        await Comment.findByIdAndDelete(commentId);
-        res.sendStatus(204);
+        const comment = await Comment.findByIdAndDelete(commentId);
+        if (!comment) {
+            return res.status(404).json({ success: false, error: 'Comment not found' });
+        }
+        res.json({ success: true });
     } catch (error) {
         logger.error(`Error deleting comment ${commentId}: ${error.message}`);
         Sentry.captureException(error);
-        res.status(500).json({ error: 'Failed to delete comment: ' + error.message });
+        res.status(500).json({ success: false, error: 'Failed to delete comment: ' + error.message });
     }
 });
 
 app.get('/api/skills', async (req, res) => {
-    const skills = await Skill.find();
-    res.json(skills);
+    try {
+        const skills = await Skill.find();
+        res.json({ success: true, data: skills });
+    } catch (error) {
+        logger.error(`Error fetching skills: ${error.message}`);
+        Sentry.captureException(error, { extra: { endpoint: '/api/skills', method: 'GET' } });
+        res.status(500).json({ success: false, error: 'Failed to fetch skills: ' + error.message });
+    }
 });
 
 app.post('/api/skills', authenticateToken, isAdmin, [
@@ -1478,17 +1840,17 @@ app.post('/api/skills', authenticateToken, isAdmin, [
 ], async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-        return res.status(400).json({ errors: errors.array() });
+        return res.status(400).json({ success: false, error: errors.array().map(e => e.msg).join(', ') });
     }
     const { name, icon, percentage } = req.body;
     try {
         const skill = new Skill({ name, icon, percentage });
         await skill.save();
-        res.status(201).json(skill);
+        res.status(201).json({ success: true, data: skill });
     } catch (error) {
         logger.error(`Error saving skill: ${error.message}`);
         Sentry.captureException(error);
-        res.status(400).json({ error: 'Failed to save skill: ' + error.message });
+        res.status(400).json({ success: false, error: 'Failed to save skill: ' + error.message });
     }
 });
 
@@ -1500,7 +1862,7 @@ app.put('/api/skills/:skillId', authenticateToken, isAdmin, [
 ], async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-        return res.status(400).json({ errors: errors.array() });
+        return res.status(400).json({ success: false, error: errors.array().map(e => e.msg).join(', ') });
     }
     const { skillId } = req.params;
     const { name, icon, percentage } = req.body;
@@ -1510,38 +1872,42 @@ app.put('/api/skills/:skillId', authenticateToken, isAdmin, [
             { name, icon, percentage },
             { new: true, runValidators: true }
         );
-        if (!skill) return res.status(404).json({ error: 'Skill not found' });
-        res.json(skill);
+        if (!skill) {
+            return res.status(404).json({ success: false, error: 'Skill not found' });
+        }
+        res.json({ success: true, data: skill });
     } catch (error) {
         logger.error(`Error updating skill ${skillId}: ${error.message}`);
         Sentry.captureException(error);
-        res.status(400).json({ error: 'Failed to update skill: ' + error.message });
+        res.status(400).json({ success: false, error: 'Failed to update skill: ' + error.message });
     }
 });
 
 app.delete('/api/skills/:skillId', authenticateToken, isAdmin, async (req, res) => {
     const { skillId } = req.params;
     try {
-        await Skill.findByIdAndDelete(skillId);
-        res.sendStatus(204);
+        const skill = await Skill.findByIdAndDelete(skillId);
+        if (!skill) {
+            return res.status(404).json({ success: false, error: 'Skill not found' });
+        }
+        res.json({ success: true });
     } catch (error) {
         logger.error(`Error deleting skill ${skillId}: ${error.message}`);
         Sentry.captureException(error);
-        res.status(500).json({ error: 'Failed to delete skill: ' + error.message });
+        res.status(500).json({ success: false, error: 'Failed to delete skill: ' + error.message });
     }
 });
 
 
 
+// تحديث endpoint /api/profile/me
 app.get('/api/profile/me', authenticateToken, async (req, res) => {
     try {
         const user = await User.findById(req.user.userId).select('username profile');
         if (!user) {
-            logger.warn(`User not found: ${req.user.userId}`);
             return res.status(404).json({ error: 'المستخدم غير موجود' });
         }
 
-        // إعداد الملف الشخصي الافتراضي
         const profile = user.profile || {
             portfolioName: 'Portfolio',
             nickname: '',
@@ -1559,28 +1925,112 @@ app.get('/api/profile/me', authenticateToken, async (req, res) => {
             certificates: [],
             skills: [],
             projects: [],
-            interests: []
+            interests: [],
+            theme: {
+                id: 'default',
+                primaryColor: '#3b82f6',
+                secondaryColor: '#8b5cf6',
+                fontFamily: 'Inter',
+                borderRadius: '0.5rem',
+            },
+            layout: {
+                type: 'grid',
+                columns: 3,
+                showProjectImages: true,
+                showProjectDescriptions: true,
+                showProjectRatings: true,
+                showProjectLinks: true,
+            },
+            header: {
+                showAvatar: true,
+                showJobTitle: true,
+                showBio: true,
+                showContactInfo: true,
+                showSocialLinks: true,
+                layout: 'centered',
+            },
+            footer: {
+                showCopyright: true,
+                customText: '',
+            },
+            seo: {
+                title: '',
+                description: '',
+                keywords: '',
+                ogImage: '',
+                ogTitle: '',
+                ogDescription: '',
+                twitterCard: 'summary_large_image',
+                twitterSite: '',
+                canonicalUrl: '',
+                noindex: false,
+                nofollow: false,
+            },
+            schema: {
+                type: 'Person',
+                name: '',
+                description: '',
+                image: '',
+                sameAs: [],
+                jobTitle: '',
+                worksFor: '',
+                alumniOf: [],
+                knowsAbout: [],
+            },
         };
 
-        // إزالة التحقق من الشفافية لأن الـ frontend مش بيستخدمها
         res.json({
             username: user.username,
             profile
         });
     } catch (error) {
-        logger.error(`Error fetching profile for user ${req.user.userId}: ${error.message}`);
-        Sentry.captureException(error);
+        logger.error(`Error fetching profile: ${error.message}`);
         res.status(500).json({ error: 'خطأ في استرجاع الملف الشخصي' });
     }
 });
 
 
+app.post('/api/user/education', authenticateToken, [
+    body('institution').notEmpty().withMessage('Institution is required'),
+    body('degree').notEmpty().withMessage('Degree is required'),
+    body('year').isInt({ min: 1900, max: new Date().getFullYear() }).withMessage('Invalid year')
+], async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ success: false, error: errors.array().map(e => e.msg).join(', ') });
+    }
+    const { institution, degree, year } = req.body;
+    try {
+        const user = await User.findById(req.user.userId);
+        if (!user) {
+            return res.status(404).json({ success: false, error: 'User not found' });
+        }
+        user.education = user.education || [];
+        user.education.push({ institution, degree, year });
+        await user.save();
+        logger.info(`Education added for user ${req.user.userId}: ${institution}`);
+        res.status(201).json({ success: true, data: user.education });
+    } catch (error) {
+        logger.error(`Error adding education for user ${req.user.userId}: ${error.message}`);
+        Sentry.captureException(error, { user: { id: req.user.userId, email: req.user.email } });
+        res.status(400).json({ success: false, error: 'Failed to add education: ' + error.message });
+    }
+});
+
+// ============================================
+// GET /api/profile/:nickname - جلب الملف الشخصي
+// ============================================
+// ============================================
+// GET /api/profile/:nickname - جلب الملف الشخصي
+// ============================================
 app.get('/api/profile/:nickname', async (req, res) => {
     try {
         const decodedNickname = decodeURIComponent(req.params.nickname);
+
+        // 1. جلب المستخدم مع البروفايل
         const user = await User.findOne({
             $or: [
-                { 'profile.nickname': { $regex: `^${decodedNickname}$`, $options: 'i' } }, // Case-insensitive
+                { 'profile.nickname': { $regex: `^${decodedNickname}$`, $options: 'i' } },
                 { username: { $regex: `^${decodedNickname}$`, $options: 'i' } },
             ],
         }).select('username profile notifications');
@@ -1590,60 +2040,30 @@ app.get('/api/profile/:nickname', async (req, res) => {
             return res.status(404).json({ error: `Profile not found for ${decodedNickname}` });
         }
 
-        // Check privacy settings
-        if (!user.profile.isPublic && (!req.user || req.user.userId !== user._id.toString())) {
-            logger.warn(`Unauthorized access attempt to private profile: ${decodedNickname} by user: ${req.user?.userId || 'anonymous'}`);
+        // 2. التحقق من الخصوصية
+        const isOwner = req.user && req.user.userId === user._id.toString();
+
+        if (!user.profile.isPublic && !isOwner) {
+            logger.warn(`Unauthorized access attempt to private profile: ${decodedNickname}`);
             return res.status(403).json({ error: 'Profile is private', loginRequired: true });
         }
 
-        // Track profile view with Google Analytics
-        if (process.env.GOOGLE_ANALYTICS_ID && process.env.GOOGLE_ANALYTICS_API_SECRET) {
-            try {
-                await axios.post('https://www.google-analytics.com/mp/collect', {
-                    measurement_id: process.env.GOOGLE_ANALYTICS_ID,
-                    api_secret: process.env.GOOGLE_ANALYTICS_API_SECRET,
-                    events: [{
-                        name: 'view_profile',
-                        params: {
-                            nickname: decodedNickname,
-                            userId: req.user?.userId || 'anonymous',
-                            timestamp: new Date().toISOString(),
-                        },
-                    }],
-                }, {
-                    headers: { 'Content-Type': 'application/json' },
-                    timeout: 5000,
-                });
-                logger.info(`Profile view tracked for ${decodedNickname}`);
-            } catch (analyticsError) {
-                logger.error(`Failed to track profile view for ${decodedNickname}: ${analyticsError.message}`);
-                Sentry.captureException(analyticsError);
-            }
+        // 3. جلب المشاريع من Project collection
+        const projectsQuery = { userId: user._id };
+        if (!isOwner) {
+            projectsQuery.isPublic = true; // غير المالك يشوف العامة فقط
         }
 
-        // Send push notification to profile owner
-        if (user.notifications?.length > 0 && req.user?.userId !== user._id.toString()) {
-            try {
-                const subscription = user.notifications[0];
-                // Validate subscription object
-                if (subscription.endpoint && subscription.keys?.p256dh && subscription.keys?.auth) {
-                    const payload = JSON.stringify({
-                        title: 'Profile Viewed',
-                        body: `Your profile (${decodedNickname}) was viewed by ${req.user?.username || 'an anonymous user'}.`,
-                    });
-                    await webpush.sendNotification(subscription, payload);
-                    logger.info(`Push notification sent to ${user._id} for profile view`);
-                }
-            } catch (pushError) {
-                logger.error(`Failed to send push notification: ${pushError.message}`);
-                Sentry.captureException(pushError);
-            }
-        }
+        const projects = await Project.find(projectsQuery)
+            .select('title description image rating stars links isPublic')
+            .sort({ createdAt: -1 })
+            .lean();
 
-        // Prepare response
+        // 4. تجهيز الرد مع كل البيانات بما في ذلك المظهر و SEO
         const response = {
             username: user.username,
             profile: {
+                // المعلومات الأساسية (موجودة)
                 nickname: user.profile.nickname || user.username,
                 portfolioName: user.profile.portfolioName || 'Portfolio',
                 avatar: user.profile.avatar || '/assets/img/default-avatar.png',
@@ -1652,28 +2072,137 @@ app.get('/api/profile/:nickname', async (req, res) => {
                 jobTitle: user.profile.jobTitle || '',
                 bio: user.profile.bio || '',
                 phone: user.profile.phone || '',
-                socialLinks: user.profile.socialLinks || {},
+                status: user.profile.status || 'Available',
+                isPublic: user.profile.isPublic ?? true,
+                pdfFormat: user.profile.pdfFormat || 'jspdf',
+
+                // المشاريع
+                projects: projects,
+
+                // الروابط الاجتماعية
+                socialLinks: user.profile.socialLinks || {
+                    linkedin: '',
+                    behance: '',
+                    github: '',
+                    whatsapp: ''
+                },
+
+                // الأقسام الأخرى
                 education: user.profile.education || [],
                 experience: user.profile.experience || [],
                 certificates: user.profile.certificates || [],
-                interests: user.profile.interests || [],
                 skills: user.profile.skills || [],
-                projects: user.profile.projects || [],
-                pdfFormat: user.profile.pdfFormat || 'jspdf',
-                isPublic: user.profile.isPublic ?? true,
-                status: user.profile.status || 'Available',
+                interests: user.profile.interests || [],
+
+                // ✅ إعدادات المظهر (الجديدة)
+                theme: user.profile.theme || {
+                    id: 'default',
+                    primaryColor: '#3b82f6',
+                    secondaryColor: '#8b5cf6',
+                    fontFamily: 'Inter',
+                    borderRadius: '0.5rem',
+                },
+
+                // ✅ إعدادات التخطيط (الجديدة)
+                layout: user.profile.layout || {
+                    type: 'grid',
+                    columns: 3,
+                    showProjectImages: true,
+                    showProjectDescriptions: true,
+                    showProjectRatings: true,
+                    showProjectLinks: true,
+                },
+
+                // ✅ إعدادات الهيدر (الجديدة)
+                header: user.profile.header || {
+                    showAvatar: true,
+                    showJobTitle: true,
+                    showBio: true,
+                    showContactInfo: true,
+                    showSocialLinks: true,
+                    layout: 'centered',
+                },
+
+                // ✅ إعدادات الفوتر (الجديدة)
+                footer: user.profile.footer || {
+                    showCopyright: true,
+                    customText: '',
+                },
+
+                // ✅ إعدادات SEO (الجديدة)
+                seo: user.profile.seo || {
+                    title: user.profile.portfolioName || 'My Portfolio',
+                    description: user.profile.bio || '',
+                    keywords: '',
+                    ogImage: user.profile.avatar || '',
+                    ogTitle: '',
+                    ogDescription: '',
+                    twitterCard: 'summary_large_image',
+                    twitterSite: '',
+                    canonicalUrl: '',
+                    noindex: false,
+                    nofollow: false,
+                },
+
+                // ✅ إعدادات Schema (الجديدة)
+                schema: user.profile.schema || {
+                    type: 'Person',
+                    name: user.profile.nickname || user.username,
+                    description: user.profile.bio || '',
+                    image: user.profile.avatar || '',
+                    sameAs: [],
+                    jobTitle: user.profile.jobTitle || '',
+                    worksFor: '',
+                    alumniOf: [],
+                    knowsAbout: [],
+                },
             },
         };
 
+        // 5. تسجيل المشاهدة (اختياري)
+        if (!isOwner) {
+            try {
+                // Google Analytics
+                if (process.env.GOOGLE_ANALYTICS_ID && process.env.GOOGLE_ANALYTICS_API_SECRET) {
+                    await axios.post('https://www.google-analytics.com/mp/collect', {
+                        measurement_id: process.env.GOOGLE_ANALYTICS_ID,
+                        api_secret: process.env.GOOGLE_ANALYTICS_API_SECRET,
+                        events: [{
+                            name: 'view_profile',
+                            params: {
+                                nickname: decodedNickname,
+                                userId: req.user?.userId || 'anonymous',
+                                timestamp: new Date().toISOString(),
+                            },
+                        }],
+                    }, { timeout: 5000 });
+                }
+
+                // إشعار push لصاحب الملف الشخصي
+                if (user.notifications?.length > 0) {
+                    const subscription = user.notifications[0];
+                    if (subscription.endpoint && subscription.keys?.p256dh && subscription.keys?.auth) {
+                        const payload = JSON.stringify({
+                            title: '👀 Profile Viewed',
+                            body: `Your profile was viewed by ${req.user?.username || 'someone'}`,
+                        });
+                        await webpush.sendNotification(subscription, payload);
+                    }
+                }
+            } catch (analyticsError) {
+                // لا نوقف التنفيذ إذا فشلت التحليلات
+                logger.error(`Analytics error: ${analyticsError.message}`);
+            }
+        }
+
         res.json(response);
+
     } catch (error) {
         logger.error(`Error fetching profile for ${req.params.nickname}: ${error.message}`);
         Sentry.captureException(error);
         res.status(500).json({ error: `Failed to fetch profile: ${error.message}` });
     }
 });
-
-
 
 const googleLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
@@ -1684,6 +2213,169 @@ app.use('/api/google', googleLimiter);
 
 
 
+
+// app.get('/api/profile/:nickname/seo-preview')
+
+// ============================================
+// GET /api/profile/:nickname/seo-preview - معاينة SEO
+// ============================================
+app.get('/api/profile/:nickname/seo-preview', async (req, res) => {
+    try {
+        const decodedNickname = decodeURIComponent(req.params.nickname);
+
+        const user = await User.findOne({
+            $or: [
+                { 'profile.nickname': decodedNickname },
+                { username: decodedNickname },
+            ],
+        }).select('profile');
+
+        if (!user) {
+            return res.status(404).json({ error: 'Profile not found' });
+        }
+
+        const baseUrl = process.env.BASE_URL || 'https://mgzon.com';
+        const profileUrl = `${baseUrl}/portfolio/${user.profile.nickname || user.username}`;
+
+        // إنشاء meta tags preview
+        const metaTags = {
+            title: user.profile.seo?.title || user.profile.portfolioName || 'My Portfolio',
+            description: user.profile.seo?.description || user.profile.bio || '',
+            ogImage: user.profile.seo?.ogImage || user.profile.avatar || '',
+            canonicalUrl: user.profile.seo?.canonicalUrl || profileUrl,
+            noindex: user.profile.seo?.noindex || false,
+            nofollow: user.profile.seo?.nofollow || false,
+        };
+
+        // إنشاء Schema.org JSON-LD
+        const schema = {
+            "@context": "https://schema.org",
+            "@type": user.profile.schema?.type || 'Person',
+            "name": user.profile.schema?.name || user.profile.nickname || user.username,
+            "description": user.profile.schema?.description || user.profile.bio || '',
+            "image": user.profile.schema?.image || user.profile.avatar || '',
+            "sameAs": user.profile.schema?.sameAs || [],
+            "url": profileUrl,
+        };
+
+        if (user.profile.schema?.jobTitle) {
+            schema.jobTitle = user.profile.schema.jobTitle;
+        }
+        if (user.profile.schema?.worksFor) {
+            schema.worksFor = user.profile.schema.worksFor;
+        }
+        if (user.profile.schema?.alumniOf?.length) {
+            schema.alumniOf = user.profile.schema.alumniOf.map(org => ({
+                "@type": "Organization",
+                "name": org
+            }));
+        }
+        if (user.profile.schema?.knowsAbout?.length) {
+            schema.knowsAbout = user.profile.schema.knowsAbout;
+        }
+
+        res.json({
+            metaTags,
+            schema,
+            preview: {
+                google: {
+                    title: metaTags.title,
+                    description: metaTags.description,
+                    url: profileUrl,
+                },
+                facebook: {
+                    title: user.profile.seo?.ogTitle || metaTags.title,
+                    description: user.profile.seo?.ogDescription || metaTags.description,
+                    image: metaTags.ogImage,
+                },
+                twitter: {
+                    card: user.profile.seo?.twitterCard || 'summary_large_image',
+                    site: user.profile.seo?.twitterSite || '',
+                },
+            },
+        });
+
+    } catch (error) {
+        logger.error(`Error generating SEO preview: ${error.message}`);
+        res.status(500).json({ error: 'Failed to generate SEO preview' });
+    }
+});
+
+// ============================================
+// PUT /api/profile/appearance - تحديث المظهر
+// ============================================
+app.put('/api/profile/appearance', authenticateToken, [
+    body('theme').optional().isObject(),
+    body('layout').optional().isObject(),
+    body('header').optional().isObject(),
+    body('footer').optional().isObject(),
+], async (req, res) => {
+    try {
+        const user = await User.findById(req.user.userId);
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        const { theme, layout, header, footer } = req.body;
+
+        if (theme) user.profile.theme = { ...user.profile.theme, ...theme };
+        if (layout) user.profile.layout = { ...user.profile.layout, ...layout };
+        if (header) user.profile.header = { ...user.profile.header, ...header };
+        if (footer) user.profile.footer = { ...user.profile.footer, ...footer };
+
+        await user.save();
+
+        res.json({
+            success: true,
+            message: 'Appearance updated successfully',
+            data: {
+                theme: user.profile.theme,
+                layout: user.profile.layout,
+                header: user.profile.header,
+                footer: user.profile.footer,
+            }
+        });
+    } catch (error) {
+        logger.error(`Error updating appearance: ${error.message}`);
+        res.status(500).json({ error: 'Failed to update appearance' });
+    }
+});
+
+
+
+// ============================================
+// PUT /api/profile/seo - تحديث SEO
+// ============================================
+app.put('/api/profile/seo', authenticateToken, [
+    body('seo').optional().isObject(),
+    body('schema').optional().isObject(),
+], async (req, res) => {
+    try {
+        const user = await User.findById(req.user.userId);
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        const { seo, schema } = req.body;
+
+        if (seo) user.profile.seo = { ...user.profile.seo, ...seo };
+        if (schema) user.profile.schema = { ...user.profile.schema, ...schema };
+
+        await user.save();
+
+        res.json({
+            success: true,
+            message: 'SEO settings updated successfully',
+            data: {
+                seo: user.profile.seo,
+                schema: user.profile.schema,
+            }
+        });
+    } catch (error) {
+        logger.error(`Error updating SEO: ${error.message}`);
+        res.status(500).json({ error: 'Failed to update SEO' });
+    }
+});
 
 app.get('/api/check-nickname', authenticateToken, [
     body('nickname').isLength({ min: 3 }).withMessage('Nickname must be at least 3 characters long'),
@@ -1698,9 +2390,9 @@ app.get('/api/check-nickname', authenticateToken, [
         if (!nickname) {
             return res.status(400).json({ error: 'Nickname is required' });
         }
-        const user = await User.findOne({ 
-            'profile.nickname': { $regex: `^${nickname}$`, $options: 'i' }, 
-            _id: { $ne: req.user.userId } 
+        const user = await User.findOne({
+            'profile.nickname': { $regex: `^${nickname}$`, $options: 'i' },
+            _id: { $ne: req.user.userId }
         });
         res.json({ available: !user });
     } catch (error) {
@@ -1790,6 +2482,60 @@ app.put('/api/profile', authenticateToken, upload.fields([
             return false;
         }
     }).withMessage('Invalid GitHub project IDs format'),
+
+    body('theme').optional().custom(value => {
+        try {
+            const parsed = JSON.parse(value);
+            return parsed.id && parsed.primaryColor && parsed.secondaryColor;
+        } catch {
+            return false;
+        }
+    }).withMessage('Invalid theme format'),
+
+    body('layout').optional().custom(value => {
+        try {
+            const parsed = JSON.parse(value);
+            return parsed.type && ['grid', 'list', 'masonry'].includes(parsed.type);
+        } catch {
+            return false;
+        }
+    }).withMessage('Invalid layout format'),
+
+    body('header').optional().custom(value => {
+        try {
+            const parsed = JSON.parse(value);
+            return parsed.layout && ['centered', 'left-aligned'].includes(parsed.layout);
+        } catch {
+            return false;
+        }
+    }).withMessage('Invalid header format'),
+
+    body('footer').optional().custom(value => {
+        try {
+            JSON.parse(value);
+            return true;
+        } catch {
+            return false;
+        }
+    }).withMessage('Invalid footer format'),
+
+    body('seo').optional().custom(value => {
+        try {
+            const parsed = JSON.parse(value);
+            return parsed.title && parsed.description;
+        } catch {
+            return false;
+        }
+    }).withMessage('Invalid SEO format'),
+
+    body('schema').optional().custom(value => {
+        try {
+            JSON.parse(value);
+            return true;
+        } catch {
+            return false;
+        }
+    }).withMessage('Invalid schema format'),
 ], async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -1800,7 +2546,8 @@ app.put('/api/profile', authenticateToken, upload.fields([
         const {
             nickname, jobTitle, bio, phone, socialLinks, education, experience,
             certificates, skills, projects, interests, isPublic, avatarDisplayType,
-            svgColor, status, portfolioName, pdfFormat
+            svgColor, status, portfolioName, pdfFormat, theme, layout, header, footer, seo, schema
+
         } = req.body;
 
         const user = await User.findById(req.user.userId);
@@ -1818,13 +2565,26 @@ app.put('/api/profile', authenticateToken, upload.fields([
 
         const parseJSON = (str, defaultValue) => {
             try {
-                return str ? JSON.parse(str) : defaultValue;
+                if (!str) return defaultValue;
+                // Parse the JSON string
+                const parsed = JSON.parse(str);
+                // Merge with default values
+                return { ...defaultValue, ...parsed };
             } catch (error) {
-                logger.error(`Invalid JSON for ${str}: ${error.message}`);
+                logger.error(`Invalid JSON: ${error.message}`);
                 Sentry.captureException(error);
                 return defaultValue;
             }
         };
+
+        if (theme) user.profile.theme = parseJSON(theme, user.profile.theme);
+        if (layout) user.profile.layout = parseJSON(layout, user.profile.layout);
+        if (header) user.profile.header = parseJSON(header, user.profile.header);
+        if (footer) user.profile.footer = parseJSON(footer, user.profile.footer);
+        if (seo) user.profile.seo = parseJSON(seo, user.profile.seo);
+        if (schema) user.profile.schema = parseJSON(schema, user.profile.schema);
+
+
 
         // Parse input fields
         const parsedSocialLinks = parseJSON(socialLinks, user.profile.socialLinks);
@@ -1920,7 +2680,63 @@ app.put('/api/profile', authenticateToken, upload.fields([
             customFields: parseJSON(req.body.customFields, user.profile.customFields || []),
             portfolioName: portfolioName || user.profile.portfolioName || 'Portfolio',
             status: status || user.profile.status || 'Available',
-            pdfFormat: pdfFormat || user.profile.pdfFormat || 'jspdf'
+            pdfFormat: pdfFormat || user.profile.pdfFormat || 'jspdf',
+            theme: theme ? parseJSON(theme, user.profile.theme) : user.profile.theme || {
+                id: 'default',
+                primaryColor: '#3b82f6',
+                secondaryColor: '#8b5cf6',
+                fontFamily: 'Inter',
+                borderRadius: '0.5rem',
+            },
+
+            layout: layout ? parseJSON(layout, user.profile.layout) : user.profile.layout || {
+                type: 'grid',
+                columns: 3,
+                showProjectImages: true,
+                showProjectDescriptions: true,
+                showProjectRatings: true,
+                showProjectLinks: true,
+            },
+
+            header: header ? parseJSON(header, user.profile.header) : user.profile.header || {
+                showAvatar: true,
+                showJobTitle: true,
+                showBio: true,
+                showContactInfo: true,
+                showSocialLinks: true,
+                layout: 'centered',
+            },
+
+            footer: footer ? parseJSON(footer, user.profile.footer) : user.profile.footer || {
+                showCopyright: true,
+                customText: '',
+            },
+
+            seo: seo ? parseJSON(seo, user.profile.seo) : user.profile.seo || {
+                title: portfolioName || 'My Portfolio',
+                description: bio || '',
+                keywords: '',
+                ogImage: user.profile.avatar || '',
+                ogTitle: '',
+                ogDescription: '',
+                twitterCard: 'summary_large_image',
+                twitterSite: '',
+                canonicalUrl: '',
+                noindex: false,
+                nofollow: false,
+            },
+
+            schema: schema ? parseJSON(schema, user.profile.schema) : user.profile.schema || {
+                type: 'Person',
+                name: nickname || user.username,
+                description: bio || '',
+                image: user.profile.avatar || '',
+                sameAs: [],
+                jobTitle: jobTitle || '',
+                worksFor: '',
+                alumniOf: [],
+                knowsAbout: [],
+            },
         };
 
         await user.save();
@@ -1964,53 +2780,38 @@ app.put('/api/profile', authenticateToken, upload.fields([
 
 cron.schedule('0 0 * * *', async () => {
     try {
-        const users = await User.find({ githubAccessToken: { $exists: true } });
+        const users = await User.find({ githubAccessToken: { $exists: true }, 'profile.projects': { $elemMatch: { 'links.option': 'GitHub' } } });
         for (const user of users) {
-            const hasGitHubProjects = user.profile.projects.some(project =>
-                project.links.some(link => link.option === 'GitHub')
-            );
-            if (!hasGitHubProjects) continue;
-
-            try {
-                const response = await axios.get('https://api.github.com/user/repos', {
-                    headers: { Authorization: `Bearer ${user.githubAccessToken}` },
-                });
-                if (response.status === 401) {
-                    logger.warn(`GitHub token expired for user ${user.email}`);
-                    continue;
-                }
-                const repos = response.data;
-
-                user.profile.projects = user.profile.projects.map(project => {
-                    const repo = repos.find(r => r.html_url === project.links.find(l => l.option === 'GitHub')?.value);
-                    if (repo) {
-                        return {
-                            ...project,
-                            title: repo.name,
-                            description: repo.description || project.description,
-                            image: project.image || repo.owner.avatar_url,
-                        };
+            const githubProjects = user.profile.projects.filter(p => p.links.some(l => l.option === 'GitHub'));
+            for (const project of githubProjects) {
+                const githubLink = project.links.find(l => l.option === 'GitHub')?.value;
+                if (!githubLink) continue;
+                try {
+                    const repoName = githubLink.split('/').slice(-2).join('/');
+                    const response = await axios.get(`https://api.github.com/repos/${repoName}`, {
+                        headers: { Authorization: `Bearer ${user.githubAccessToken}` },
+                    });
+                    if (response.status === 401) {
+                        logger.warn(`GitHub token expired for user ${user.email}`);
+                        continue;
                     }
-                    return project;
-                });
-
-                await user.save();
-                logger.info(`Synced GitHub projects for user ${user.email}`);
-            } catch (error) {
-                if (error.response?.status === 401) {
-                    logger.warn(`GitHub token expired for user ${user.email}`);
-                    continue;
+                    const repo = response.data;
+                    project.title = repo.name;
+                    project.description = repo.description || project.description;
+                    project.image = project.image || repo.owner.avatar_url;
+                } catch (error) {
+                    logger.error(`Error syncing GitHub project ${githubLink} for user ${user.email}: ${error.message}`);
+                    Sentry.captureException(error);
                 }
-                logger.error(`Error syncing GitHub projects for user ${user.email}: ${error.message}`);
-                Sentry.captureException(error);
             }
+            await user.save();
+            logger.info(`Synced GitHub projects for user ${user.email}`);
         }
     } catch (error) {
         logger.error(`Error in cron job: ${error.message}`);
         Sentry.captureException(error);
     }
 });
-
 
 const githubLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
@@ -2029,15 +2830,71 @@ app.get('/api/user-interactions', authenticateToken, async (req, res) => {
         res.status(500).json({ error: 'Failed to fetch interactions: ' + error.message });
     }
 });
+// للسماح للمستخدم العادي 
+
+app.post('/api/user/skills', authenticateToken, [
+    body('name').notEmpty().withMessage('Skill name is required'),
+    body('proficiency').isInt({ min: 1, max: 100 }).withMessage('Proficiency must be between 1 and 100')
+], async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ success: false, error: errors.array().map(e => e.msg).join(', ') });
+    }
+    const { name, proficiency } = req.body;
+    try {
+        const user = await User.findById(req.user.userId);
+        if (!user) {
+            return res.status(404).json({ success: false, error: 'User not found' });
+        }
+        user.skills = user.skills || [];
+        user.skills.push({ name, proficiency });
+        await user.save();
+        logger.info(`Skill ${name} added to user ${req.user.userId}`);
+        res.status(201).json({ success: true, data: user.skills });
+    } catch (error) {
+        logger.error(`Error adding skill for user ${req.user.userId}: ${error.message}`);
+        Sentry.captureException(error, { user: { id: req.user.userId, email: req.user.email } });
+        res.status(400).json({ success: false, error: 'Failed to add skill: ' + error.message });
+    }
+});
+
+
+
+app.post('/api/users', authenticateToken, isAdmin, [
+    body('username').notEmpty().withMessage('Username is required'),
+    body('email').isEmail().withMessage('Valid email is required'),
+    body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
+    body('role').isIn(['User', 'Admin']).withMessage('Role must be either User or Admin')
+], async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ success: false, error: errors.array().map(e => e.msg).join(', ') });
+    }
+    const { username, email, password, role } = req.body;
+    try {
+        const existingUser = await User.findOne({ $or: [{ username }, { email }] });
+        if (existingUser) {
+            return res.status(400).json({ success: false, error: 'Username or email already exists' });
+        }
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const user = new User({ username, email, password: hashedPassword, role });
+        await user.save();
+        res.status(201).json({ success: true, data: user });
+    } catch (error) {
+        logger.error(`Error creating user: ${error.message}`);
+        Sentry.captureException(error);
+        res.status(400).json({ success: false, error: 'Failed to create user: ' + error.message });
+    }
+});
 
 app.get('/api/users', authenticateToken, isAdmin, async (req, res) => {
     try {
-        const users = await User.find({}, 'username email profile');
-        res.json(users);
+        const users = await User.find().select('username email profile role');
+        res.json({ success: true, data: users });
     } catch (error) {
         logger.error(`Error fetching users: ${error.message}`);
-        Sentry.captureException(error);
-        res.status(500).json({ error: 'Failed to fetch users: ' + error.message });
+        Sentry.captureException(error, { extra: { endpoint: '/api/users', method: 'GET' } });
+        res.status(500).json({ success: false, error: 'Failed to fetch users: ' + error.message });
     }
 });
 
@@ -2259,6 +3116,16 @@ app.get('/api/profile/pdf/:nickname', authenticateToken, async (req, res) => {
     }
 });
 
+app.delete('/api/delete-account', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        await User.deleteOne({ _id: userId }); // حذف المستخدم
+        await Profile.deleteOne({ userId }); // حذف الملف الشخصي
+        res.status(200).json({ message: 'Account deleted successfully' });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to delete account' });
+    }
+});
 
 
 const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType } = require('docx');
@@ -2493,6 +3360,241 @@ app.get('/api/profile/docx/:nickname', authenticateToken, async (req, res) => {
     }
 });
 
+
+// ============================================
+// POST /api/notifications/:id/read - تعليم الإشعار كمقروء
+// ============================================
+app.post('/api/notifications/:id/read', authenticateToken, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.userId);
+        if (!user) {
+            return res.status(404).json({ success: false, error: 'User not found' });
+        }
+
+        const notificationId = req.params.id;
+        const notification = user.notifications.id(notificationId);
+
+        if (!notification) {
+            return res.status(404).json({ success: false, error: 'Notification not found' });
+        }
+
+        notification.read = true;
+        await user.save();
+
+        res.json({ success: true, message: 'Notification marked as read' });
+    } catch (error) {
+        logger.error(`Error marking notification as read: ${error.message}`);
+        res.status(500).json({ success: false, error: 'Failed to mark notification as read' });
+    }
+});
+
+// ============================================
+// DELETE /api/notifications/:id - حذف إشعار
+// ============================================
+app.delete('/api/notifications/:id', authenticateToken, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.userId);
+        if (!user) {
+            return res.status(404).json({ success: false, error: 'User not found' });
+        }
+
+        user.notifications = user.notifications.filter(n => n._id.toString() !== req.params.id);
+        await user.save();
+
+        res.json({ success: true, message: 'Notification deleted' });
+    } catch (error) {
+        logger.error(`Error deleting notification: ${error.message}`);
+        res.status(500).json({ success: false, error: 'Failed to delete notification' });
+    }
+});
+
+
+
+// ============================================
+// GET /api/educations - جلب التعليم
+// ============================================
+app.get('/api/educations', authenticateToken, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.userId);
+        if (!user) {
+            return res.status(404).json({ success: false, error: 'User not found' });
+        }
+
+        res.json({ success: true, data: user.profile.education || [] });
+    } catch (error) {
+        logger.error(`Error fetching education: ${error.message}`);
+        res.status(500).json({ success: false, error: 'Failed to fetch education' });
+    }
+});
+
+// ============================================
+// POST /api/educations - إضافة تعليم جديد
+// ============================================
+app.post('/api/educations', authenticateToken, [
+    body('degree').notEmpty().withMessage('Degree is required'),
+    body('institution').notEmpty().withMessage('Institution is required'),
+    body('startYear').isInt({ min: 1900, max: new Date().getFullYear() }).withMessage('Invalid start year'),
+    body('endYear').isInt({ min: 1900, max: new Date().getFullYear() + 5 }).withMessage('Invalid end year'),
+    body('description').optional()
+], async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ success: false, error: errors.array().map(e => e.msg).join(', ') });
+    }
+
+    try {
+        const user = await User.findById(req.user.userId);
+        if (!user) {
+            return res.status(404).json({ success: false, error: 'User not found' });
+        }
+
+        if (!user.profile.education) {
+            user.profile.education = [];
+        }
+
+        user.profile.education.push(req.body);
+        await user.save();
+
+        res.status(201).json({ success: true, data: user.profile.education });
+    } catch (error) {
+        logger.error(`Error adding education: ${error.message}`);
+        res.status(500).json({ success: false, error: 'Failed to add education' });
+    }
+});
+
+// ============================================
+// PUT /api/educations/:id - تحديث تعليم
+// ============================================
+app.put('/api/educations/:id', authenticateToken, [
+    body('degree').optional().notEmpty(),
+    body('institution').optional().notEmpty(),
+    body('startYear').optional().isInt({ min: 1900, max: new Date().getFullYear() }),
+    body('endYear').optional().isInt({ min: 1900, max: new Date().getFullYear() + 5 }),
+    body('description').optional()
+], async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ success: false, error: errors.array().map(e => e.msg).join(', ') });
+    }
+
+    try {
+        const user = await User.findById(req.user.userId);
+        if (!user) {
+            return res.status(404).json({ success: false, error: 'User not found' });
+        }
+
+        const educationIndex = user.profile.education.findIndex(
+            e => e._id.toString() === req.params.id
+        );
+
+        if (educationIndex === -1) {
+            return res.status(404).json({ success: false, error: 'Education not found' });
+        }
+
+        user.profile.education[educationIndex] = {
+            ...user.profile.education[educationIndex].toObject(),
+            ...req.body
+        };
+
+        await user.save();
+        res.json({ success: true, data: user.profile.education });
+    } catch (error) {
+        logger.error(`Error updating education: ${error.message}`);
+        res.status(500).json({ success: false, error: 'Failed to update education' });
+    }
+});
+
+// ============================================
+// DELETE /api/educations/:id - حذف تعليم
+// ============================================
+app.delete('/api/educations/:id', authenticateToken, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.userId);
+        if (!user) {
+            return res.status(404).json({ success: false, error: 'User not found' });
+        }
+
+        user.profile.education = user.profile.education.filter(
+            e => e._id.toString() !== req.params.id
+        );
+
+        await user.save();
+        res.json({ success: true, message: 'Education deleted' });
+    } catch (error) {
+        logger.error(`Error deleting education: ${error.message}`);
+        res.status(500).json({ success: false, error: 'Failed to delete education' });
+    }
+});
+
+
+// ============================================
+// GET /api/profile/contact - جلب معلومات الاتصال
+// ============================================
+app.get('/api/profile/contact', authenticateToken, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.userId);
+        if (!user) {
+            return res.status(404).json({ success: false, error: 'User not found' });
+        }
+
+        res.json({
+            success: true,
+            data: {
+                phone: user.profile.phone || '',
+                socialLinks: user.profile.socialLinks || {}
+            }
+        });
+    } catch (error) {
+        logger.error(`Error fetching contact info: ${error.message}`);
+        res.status(500).json({ success: false, error: 'Failed to fetch contact info' });
+    }
+});
+
+// ============================================
+// PUT /api/profile/contact - تحديث معلومات الاتصال
+// ============================================
+app.put('/api/profile/contact', authenticateToken, [
+    body('phone').optional().isMobilePhone().withMessage('Invalid phone number'),
+    body('socialLinks').optional().isObject().withMessage('Social links must be an object')
+], async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ success: false, error: errors.array().map(e => e.msg).join(', ') });
+    }
+
+    try {
+        const user = await User.findById(req.user.userId);
+        if (!user) {
+            return res.status(404).json({ success: false, error: 'User not found' });
+        }
+
+        if (req.body.phone !== undefined) {
+            user.profile.phone = req.body.phone;
+        }
+
+        if (req.body.socialLinks) {
+            user.profile.socialLinks = {
+                ...user.profile.socialLinks,
+                ...req.body.socialLinks
+            };
+        }
+
+        await user.save();
+
+        res.json({
+            success: true,
+            data: {
+                phone: user.profile.phone,
+                socialLinks: user.profile.socialLinks
+            }
+        });
+    } catch (error) {
+        logger.error(`Error updating contact info: ${error.message}`);
+        res.status(500).json({ success: false, error: 'Failed to update contact info' });
+    }
+});
+
+
 app.post('/api/forgot-password', async (req, res) => {
     const { email } = req.body;
     try {
@@ -2554,24 +3656,24 @@ app.post('/api/reset-password', [
 });
 
 app.get('/api/health', async (req, res) => {
-  try {
-    if (mongoose.connection.readyState !== 1) {
-      throw new Error('MongoDB is not connected');
+    try {
+        if (mongoose.connection.readyState !== 1) {
+            throw new Error('MongoDB is not connected');
+        }
+        await mongoose.connection.db.admin().ping();
+        const services = {
+            status: 'ok',
+            mongodb: 'connected',
+            cloudinary: cloudinary.config().cloud_name ? 'configured' : 'not configured',
+            sentry: process.env.SENTRY_DSN ? 'configured' : 'not configured',
+            timestamp: new Date()
+        };
+        res.json(services);
+    } catch (error) {
+        logger.error(`Health check error: ${error.message}`);
+        Sentry.captureException(error);
+        res.status(500).json({ error: 'Server error', details: error.message });
     }
-    await mongoose.connection.db.admin().ping();
-    const services = {
-      status: 'ok',
-      mongodb: 'connected',
-      cloudinary: cloudinary.config().cloud_name ? 'configured' : 'not configured',
-      sentry: process.env.SENTRY_DSN ? 'configured' : 'not configured',
-      timestamp: new Date()
-    };
-    res.json(services);
-  } catch (error) {
-    logger.error(`Health check error: ${error.message}`);
-    Sentry.captureException(error);
-    res.status(500).json({ error: 'Server error', details: error.message });
-  }
 });
 
 
@@ -2752,13 +3854,136 @@ app.get('/api/github-projects', async (req, res) => {
 
 
 
+app.post('/api/revoke-token', authenticateToken, [
+    body('refreshToken').notEmpty().withMessage('Refresh token is required')
+], async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ success: false, error: errors.array().map(e => e.msg).join(', ') });
+    }
+
+    const { refreshToken } = req.body;
+    try {
+        const user = await User.findById(req.user.userId);
+        if (!user) {
+            return res.status(404).json({ success: false, error: 'User not found' });
+        }
+
+        // إزالة الـ Refresh Token المحدد
+        user.refreshTokens = user.refreshTokens.filter(t => t.token !== refreshToken);
+        await user.save();
+
+        logger.info(`Refresh token revoked for user ${req.user.userId}`);
+        res.json({ success: true, message: 'Refresh token revoked successfully' });
+    } catch (error) {
+        logger.error(`Error revoking refresh token: ${error.message}`);
+        Sentry.captureException(error);
+        res.status(500).json({ success: false, error: 'Failed to revoke refresh token: ' + error.message });
+    }
+});
+
+
+// Endpoint لحذف ملف من Cloudinary
+app.delete('/api/files/delete', authenticateToken, [
+    body('public_id').notEmpty().withMessage('Public ID is required')
+], async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ success: false, error: errors.array().map(e => e.msg).join(', ') });
+    }
+
+    const { public_id } = req.body;
+    try {
+        // حذف الملف من Cloudinary
+        const result = await cloudinary.uploader.destroy(public_id);
+        if (result.result !== 'ok') {
+            return res.status(400).json({ success: false, error: 'Failed to delete file from Cloudinary' });
+        }
+
+        logger.info(`File deleted from Cloudinary: ${public_id} by user ${req.user.userId}`);
+        res.json({ success: true, message: 'File deleted successfully' });
+    } catch (error) {
+        logger.error(`Error deleting file ${public_id}: ${error.message}`);
+        Sentry.captureException(error);
+        res.status(500).json({ success: false, error: 'Failed to delete file: ' + error.message });
+    }
+});
+
+// Endpoint لاسترجاع قائمة الملفات
+app.get('/api/files/list', authenticateToken, async (req, res) => {
+    try {
+        // استرجاع الملفات من Cloudinary باستخدام prefix للمستخدم
+        const result = await cloudinary.api.resources({
+            resource_type: 'image', // يمكن تعديلها لتشمل 'raw' أو 'video' حسب الحاجة
+            prefix: `Uploads/${req.user.userId}`, // افتراضًا أن الملفات مخزنة بـ userId
+            max_results: 100
+        });
+
+        const files = result.resources.map(file => ({
+            public_id: file.public_id,
+            url: file.secure_url,
+            format: file.format,
+            created_at: file.created_at
+        }));
+
+        res.json({ success: true, data: files });
+    } catch (error) {
+        logger.error(`Error fetching file list for user ${req.user.userId}: ${error.message}`);
+        Sentry.captureException(error);
+        res.status(500).json({ success: false, error: 'Failed to fetch file list: ' + error.message });
+    }
+});
+
+
+app.get('/api/conversations/:userId', authenticateToken, async (req, res) => {
+    const { userId } = req.params;
+
+    // التحقق من أن المستخدم هو صاحب الـ userId أو Admin
+    if (req.user.userId !== userId && !req.user.isAdmin) {
+        return res.status(403).json({ success: false, error: 'Unauthorized access' });
+    }
+
+    try {
+        const conversations = await Conversation.find({ userId })
+            .sort({ 'messages.timestamp': -1 }) // ترتيب المحادثات حسب الوقت (الأحدث أولاً)
+            .select('messages');
+        res.json({ success: true, data: conversations });
+    } catch (error) {
+        logger.error(`Error fetching conversations for user ${userId}: ${error.message}`);
+        Sentry.captureException(error);
+        res.status(500).json({ success: false, error: 'Failed to fetch conversations: ' + error.message });
+    }
+});
+
+app.get('/api/notifications/:userId', authenticateToken, async (req, res) => {
+    const { userId } = req.params;
+
+    // التحقق من أن المستخدم هو صاحب الـ userId أو Admin
+    if (req.user.userId !== userId && !req.user.isAdmin) {
+        return res.status(403).json({ success: false, error: 'Unauthorized access' });
+    }
+
+    try {
+        const user = await User.findById(userId).select('notifications');
+        if (!user) {
+            return res.status(404).json({ success: false, error: 'User not found' });
+        }
+        res.json({ success: true, data: user.notifications || [] });
+    } catch (error) {
+        logger.error(`Error fetching notifications for user ${userId}: ${error.message}`);
+        Sentry.captureException(error);
+        res.status(500).json({ success: false, error: 'Failed to fetch notifications: ' + error.message });
+    }
+});
+
+
 //User
 
 app.get('/api/github/repos', authenticateToken, async (req, res) => {
     try {
         const user = await User.findById(req.user.userId);
         if (!user.githubAccessToken) {
-            return res.status(400).json({ error: 'GitHub account not linked' });
+            return res.status(400).json({ success: false, error: 'GitHub account not linked' });
         }
 
         const response = await axios.get('https://api.github.com/user/repos', {
@@ -2770,19 +3995,56 @@ app.get('/api/github/repos', authenticateToken, async (req, res) => {
             name: repo.name,
             description: repo.description || 'No description provided',
             url: repo.html_url,
-            image: repo.owner.avatar_url // Use owner avatar as a fallback image
+            image: repo.owner.avatar_url
         }));
 
-        res.json(repos);
+        res.json({ success: true, data: repos });
     } catch (error) {
         logger.error(`Error fetching GitHub repos: ${error.message}`);
         Sentry.captureException(error);
-        res.status(500).json({ error: 'Failed to fetch GitHub repositories' });
+        res.status(500).json({ success: false, error: 'Failed to fetch GitHub repositories' });
     }
 });
 
-app.get('/', (req, res) => {
-    res.json({ message: 'Welcome to Ibrahim Al-Asfar\'s Portfolio Backend API' });
+// New endpoint for auth callback
+app.get('/auth/callback', async (req, res) => {
+    const { token, refreshToken, provider, error, redirect_uri } = req.query;
+
+    // التحقق من redirect_uri
+    const targetUri = redirect_uri && allowedRedirectUris.includes(redirect_uri)
+        ? redirect_uri
+        : allowedRedirectUris[0]; // fallback إلى أول URI مسموح بيه لو الـ redirect_uri مش موجود أو مش صحيح
+
+    if (error) {
+        logger.warn(`Auth callback error for provider ${provider}: ${error}`);
+        return res.status(401).json({
+            success: false,
+            error: error,
+            redirectUri: targetUri // الـ front-end يقرر يعمل إيه بالـ redirectUri
+        });
+    }
+
+    // إرجاع JSON response بدل الـ redirect
+    return res.redirect(`${targetUri}?token=${token}&refreshToken=${refreshToken}&provider=${provider}`);
 });
 
+const fileLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 20,
+    message: 'Too many file operations, please try again later.'
+});
+app.use('/api/files', fileLimiter);
+
+app.set('view engine', 'ejs');
+app.set('views', './views');
+app.use(express.static('public'));
+
+
+
+app.get('/', (req, res) => {
+    res.render('index');
+});
+
+
 app.listen(PORT, () => logger.info(`Server running on port ${PORT}`));
+
