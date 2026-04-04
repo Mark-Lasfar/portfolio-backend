@@ -15,7 +15,9 @@ const multer = require('multer');
 const MGZonStrategy = require('passport-mgzon');
 const { jsPDF } = require('jspdf');
 const Jimp = require('jimp');
+const fs = require('fs');
 
+const path = require('path');
 require('jspdf-autotable');
 require('dotenv').config();
 
@@ -348,7 +350,7 @@ const userSchema = new mongoose.Schema({
     refreshTokens: [{ token: String, createdAt: { type: Date, default: Date.now } }],
     notifications: [{ type: String }],
     profile: {
-        nickname: { type: String,  sparse: true },
+        nickname: { type: String, sparse: true },
         avatar: String,
         status: { type: String, default: 'Available', enum: ['Available', 'Busy', 'Open to Work'] },
         jobTitle: String,
@@ -611,6 +613,26 @@ passport.use(new GitHubStrategy({
         return done(error, null);
     }
 }));
+
+app.get('/auth/github',
+    passport.authenticate('github', { scope: ['user:email', 'repo'] })
+);
+
+// مسار بدء تسجيل الدخول عبر Facebook
+app.get('/auth/facebook',
+    passport.authenticate('facebook', { scope: ['email', 'public_profile'] })
+);
+
+// مسار بدء تسجيل الدخول عبر MGZon
+app.get('/auth/mgz',
+    passport.authenticate('mgzon', { scope: ['profile:read', 'profile:write'] })
+);
+
+app.get('/auth/google',
+    passport.authenticate('google', { scope: ['profile', 'email'] })
+);
+
+
 app.get('/api/csrf-token', (req, res) => {
     const csrfToken = req.csrfToken ? req.csrfToken() : null;
     if (!csrfToken) {
@@ -4038,6 +4060,94 @@ app.use('/api/files', fileLimiter);
 app.set('view engine', 'ejs');
 app.set('views', './views');
 app.use(express.static('public'));
+
+// Privacy Policy Page
+app.get('/privacy', (req, res) => {
+    res.render('privacy');
+});
+
+// Terms of Service Page
+app.get('/terms', (req, res) => {
+    res.render('terms');
+});
+
+
+// Sitemap.xml
+app.get('/sitemap.xml', (req, res) => {
+    const baseUrl = process.env.BASE_URL || 'https://mgzon-server.hf.space';
+    const sitemap = `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+    <url>
+        <loc>${baseUrl}/</loc>
+        <lastmod>${new Date().toISOString().split('T')[0]}</lastmod>
+        <changefreq>daily</changefreq>
+        <priority>1.0</priority>
+    </url>
+    <url>
+        <loc>${baseUrl}/api-docs</loc>
+        <lastmod>${new Date().toISOString().split('T')[0]}</lastmod>
+        <changefreq>weekly</changefreq>
+        <priority>0.8</priority>
+    </url>
+    <url>
+        <loc>${baseUrl}/privacy</loc>
+        <lastmod>${new Date().toISOString().split('T')[0]}</lastmod>
+        <changefreq>monthly</changefreq>
+        <priority>0.5</priority>
+    </url>
+    <url>
+        <loc>${baseUrl}/terms</loc>
+        <lastmod>${new Date().toISOString().split('T')[0]}</lastmod>
+        <changefreq>monthly</changefreq>
+        <priority>0.5</priority>
+    </url>
+    <url>
+        <loc>${baseUrl}/api/health</loc>
+        <lastmod>${new Date().toISOString().split('T')[0]}</lastmod>
+        <changefreq>hourly</changefreq>
+        <priority>0.3</priority>
+    </url>
+    <url>
+        <loc>${baseUrl}/api/projects</loc>
+        <lastmod>${new Date().toISOString().split('T')[0]}</lastmod>
+        <changefreq>daily</changefreq>
+        <priority>0.7</priority>
+    </url>
+    <url>
+        <loc>${baseUrl}/api/skills</loc>
+        <lastmod>${new Date().toISOString().split('T')[0]}</lastmod>
+        <changefreq>weekly</changefreq>
+        <priority>0.6</priority>
+    </url>
+</urlset>`;
+    res.header('Content-Type', 'application/xml');
+    res.send(sitemap);
+});
+// Robots.txt
+app.get('/robots.txt', (req, res) => {
+    const robots = `User-agent: *
+Allow: /
+Sitemap: ${process.env.BASE_URL || 'https://mgzon-server.hf.space'}/sitemap.xml`;
+    res.header('Content-Type', 'text/plain');
+    res.send(robots);
+});
+
+// Serve static verification files (بأسماء الملفات الصحيحة)
+app.get('/google620570ce87abd87a.html', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'google620570ce87abd87a.html'));
+});
+
+app.get('/BingSiteAuth.xml', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'BingSiteAuth.xml'));
+});
+
+app.get('/yandex_b820fb59d7fe880e.html', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'yandex_b820fb59d7fe880e.html'));
+});
+
+
+// Serve profile image and logos
+app.use('/images', express.static('public/images'));
 
 
 

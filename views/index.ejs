@@ -3,23 +3,70 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
+
     <meta name="description" content="Ibrahim Al-Asfar Portfolio API - Full-stack web developer portfolio backend API">
-    <meta name="keywords" content="portfolio, API, Node.js, Express, MongoDB, developer">
+    <meta name="keywords" content="portfolio, API, Node.js, Express, MongoDB, developer, OAuth, JWT">
     <meta name="author" content="Ibrahim Al-Asfar">
+    <meta name="robots" content="index, follow">
+
+    <!-- Open Graph / Social Media -->
     <meta property="og:title" content="Ibrahim Al-Asfar Portfolio API">
-    <meta property="og:description" content="Full-stack web developer portfolio API">
+    <meta property="og:description"
+        content="Full-stack web developer portfolio API with authentication and AI features">
     <meta property="og:type" content="website">
+    <meta property="og:url" content="https://mgzon-server.hf.space">
+    <meta property="og:image" content="https://mgzon-server.hf.space/images/logo.png">
+
+
+    <!-- Open Graph / Social Media -->
+    <meta property="og:title" content="Ibrahim Al-Asfar Portfolio API">
+    <meta property="og:description"
+        content="Full-stack web developer portfolio backend API with authentication, project management, and AI features">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://mgzon-server.hf.space">
+    <meta property="og:image" content="https://mgzon-server.hf.space/images/profile.jpg">
+    <meta property="og:image:alt" content="Ibrahim Al-Asfar Profile Picture">
+    <meta property="og:site_name" content="Ibrahim Al-Asfar Portfolio">
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Ibrahim Al-Asfar Portfolio API">
+    <meta name="twitter:description" content="Full-stack web developer portfolio backend API">
+    <meta name="twitter:image" content="https://mgzon-server.hf.space/images/profile.jpg">
+    <meta name="twitter:image:alt" content="Ibrahim Al-Asfar Profile">
+    <meta name="twitter:site" content="@MarkLasfar">
+    <meta name="twitter:creator" content="@MarkLasfar">
+
+    <!-- Author -->
+    <meta name="author" content="Ibrahim Al-Asfar (Mark Elasfar)">
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Ibrahim Al-Asfar Portfolio API">
+    <meta name="twitter:description" content="Full-stack web developer portfolio API">
+    <meta name="twitter:image" content="https://mgzon-server.hf.space/images/logo.png">
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/png" href="/images/logo.png">
+    <link rel="apple-touch-icon" href="/images/logo.png">
+
     <title> Portfolio API</title>
 
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
+
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
 
-
     <!-- Custom Styles -->
     <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
         @keyframes fadeInUp {
             from {
                 opacity: 0;
@@ -32,16 +79,39 @@
             }
         }
 
+        @keyframes float {
+
+            0%,
+            100% {
+                transform: translateY(0px);
+            }
+
+            50% {
+                transform: translateY(-10px);
+            }
+        }
+
         .animate-fadeInUp {
             animation: fadeInUp 0.6s ease-out;
+        }
+
+        .animate-float {
+            animation: float 3s ease-in-out infinite;
         }
 
         .gradient-bg {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         }
 
+        .gradient-text {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
         .card-hover {
-            transition: all 0.3s ease;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         }
 
         .card-hover:hover {
@@ -49,18 +119,29 @@
             box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
         }
 
+        .btn-hover {
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn-hover:hover {
+            transform: scale(1.05);
+        }
+
         /* Custom scrollbar */
         ::-webkit-scrollbar {
-            width: 8px;
+            width: 10px;
         }
 
         ::-webkit-scrollbar-track {
             background: #f1f1f1;
+            border-radius: 10px;
         }
 
         ::-webkit-scrollbar-thumb {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            border-radius: 4px;
+            border-radius: 10px;
         }
 
         ::-webkit-scrollbar-thumb:hover {
@@ -69,13 +150,19 @@
 
         /* Logo styling */
         .logo-img {
-            width: 32px;
-            height: 32px;
+            width: 40px;
+            height: 40px;
             object-fit: contain;
-            border-radius: 8px;
+            border-radius: 10px;
         }
 
-        /* Fallback styles if Tailwind doesn't load */
+        /* Glass effect */
+        .glass-card {
+            background: rgba(255, 255, 255, 0.9);
+            backdrop-filter: blur(10px);
+        }
+
+        /* Fallback styles */
         .bg-gradient-to-br {
             background: linear-gradient(to bottom right, #f9fafb, #f3f4f6);
         }
@@ -88,12 +175,20 @@
             border-radius: 0.5rem;
         }
 
+        .rounded-xl {
+            border-radius: 0.75rem;
+        }
+
         .p-2 {
             padding: 0.5rem;
         }
 
         .p-3 {
             padding: 0.75rem;
+        }
+
+        .p-4 {
+            padding: 1rem;
         }
 
         .p-5 {
@@ -109,6 +204,11 @@
             padding-bottom: 2rem;
         }
 
+        .py-12 {
+            padding-top: 3rem;
+            padding-bottom: 3rem;
+        }
+
         .py-16 {
             padding-top: 4rem;
             padding-bottom: 4rem;
@@ -122,6 +222,11 @@
         .px-4 {
             padding-left: 1rem;
             padding-right: 1rem;
+        }
+
+        .px-8 {
+            padding-left: 2rem;
+            padding-right: 2rem;
         }
 
         .text-center {
@@ -176,6 +281,10 @@
             background-color: #10b981;
         }
 
+        .bg-red-500 {
+            background-color: #ef4444;
+        }
+
         .mb-2 {
             margin-bottom: 0.5rem;
         }
@@ -202,6 +311,10 @@
 
         .mr-2 {
             margin-right: 0.5rem;
+        }
+
+        .ml-2 {
+            margin-left: 0.5rem;
         }
 
         .flex {
@@ -261,6 +374,14 @@
             height: 3rem;
         }
 
+        .w-16 {
+            width: 4rem;
+        }
+
+        .h-16 {
+            height: 4rem;
+        }
+
         .w-3 {
             width: 0.75rem;
         }
@@ -273,8 +394,8 @@
             border-radius: 9999px;
         }
 
-        .rounded-xl {
-            border-radius: 0.75rem;
+        .cursor-pointer {
+            cursor: pointer;
         }
 
         .animate-pulse {
@@ -334,8 +455,12 @@
             transition-duration: 150ms;
         }
 
-        .hover\:shadow-lg:hover {
-            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+        .hover\:shadow-xl:hover {
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+        }
+
+        .hover\:shadow-2xl:hover {
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
         }
 
         .hover\:bg-gray-900:hover {
@@ -344,6 +469,10 @@
 
         .hover\:text-purple-600:hover {
             color: #7c3aed;
+        }
+
+        .hover\:scale-105:hover {
+            transform: scale(1.05);
         }
 
         @media (min-width: 640px) {
@@ -362,6 +491,10 @@
                 grid-template-columns: repeat(3, minmax(0, 1fr));
             }
 
+            .md\:grid-cols-4 {
+                grid-template-columns: repeat(4, minmax(0, 1fr));
+            }
+
             .md\:text-6xl {
                 font-size: 3.75rem;
             }
@@ -372,41 +505,248 @@
                 grid-template-columns: repeat(3, minmax(0, 1fr));
             }
 
+            .lg\:grid-cols-4 {
+                grid-template-columns: repeat(4, minmax(0, 1fr));
+            }
+
             .lg\:px-8 {
                 padding-left: 2rem;
                 padding-right: 2rem;
             }
         }
+
+        /* Toast notification */
+        .toast {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: white;
+            border-radius: 8px;
+            padding: 12px 20px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            z-index: 1000;
+            animation: slideIn 0.3s ease;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        .toast.success {
+            border-left: 4px solid #10b981;
+        }
+
+        .toast.error {
+            border-left: 4px solid #ef4444;
+        }
+
+        .toast.info {
+            border-left: 4px solid #3b82f6;
+        }
+
+
+        /* تحسينات للموبايل */
+        @media (max-width: 640px) {
+
+            /* تقليل padding في الأقسام */
+            .py-20 {
+                padding-top: 3rem;
+                padding-bottom: 3rem;
+            }
+
+            .py-16 {
+                padding-top: 2rem;
+                padding-bottom: 2rem;
+            }
+
+            /* جعل النص أصغر */
+            .text-5xl {
+                font-size: 2rem;
+            }
+
+            .text-3xl {
+                font-size: 1.5rem;
+            }
+
+            .text-xl {
+                font-size: 1rem;
+            }
+
+            /* تحسين الشبكة */
+            .grid {
+                gap: 1rem;
+            }
+
+            /* تحسين البطاقات */
+            .card-hover {
+                margin-bottom: 0.5rem;
+            }
+
+            /* تحسين الهيدر */
+            .h-16 {
+                height: auto;
+                padding: 0.5rem 0;
+            }
+
+            .flex {
+                flex-wrap: wrap;
+            }
+
+            /* جعل الأزرار full width */
+            .btn-hover,
+            .gradient-bg {
+                width: 100%;
+                text-align: center;
+                justify-content: center;
+            }
+
+            /* تحسين OAuth buttons */
+            .grid-cols-1.md\:grid-cols-2.lg\:grid-cols-4 {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        @media (max-width: 480px) {
+
+            /* للشاشات الصغيرة جداً */
+            .grid-cols-1.md\:grid-cols-2.lg\:grid-cols-4 {
+                grid-template-columns: 1fr;
+            }
+
+            .flex.flex-wrap.justify-center.gap-8 {
+                gap: 1rem;
+            }
+
+            .logo-img {
+                width: 30px;
+                height: 30px;
+            }
+        }
     </style>
+
+    <!-- Structured Data / Schema.org -->
+    <script type="application/ld+json">
+{
+    "@context": "https://schema.org",
+    "@type": "Person",
+    "@id": "https://mgzon-server.hf.space/#person",
+    "name": "Ibrahim Al-Asfar",
+    "alternateName": ["Mark Elasfar", "Mark Al-Asfar", "ibrahim elasfar", "ibrahim Al-asfar", "alasfar"],
+    "givenName": "Ibrahim",
+    "familyName": "Al-Asfar",
+    "email": "marklasfar@gmail.com",
+    "url": "https://mgzon-server.hf.space",
+    "image": "https://mgzon-server.hf.space/images/profile.jpg",
+    "sameAs": [
+        "https://github.com/Mark-Lasfar",
+        "https://linkedin.com/in/ibrahim-elasfar",
+        "https://twitter.com/MarkLasfar"
+    ],
+    "jobTitle": "Full-stack Web Developer",
+    "worksFor": {
+        "@type": "Organization",
+        "name": "MGZon",
+        "url": "https://mgzon.com",
+        "logo": "https://mgzon-server.hf.space/images/mgzon-logo.png"
+    },
+    "knowsAbout": ["Node.js", "Express", "MongoDB", "React", "GraphQL", "Docker", "AWS", "OAuth", "JWT", "REST API"],
+    "alumniOf": [
+        {
+            "@type": "CollegeOrUniversity",
+            "name": "Computer Science Department"
+        }
+    ],
+    "description": "Full-stack web developer portfolio backend API with authentication, project management, and AI features"
+}
+</script>
+
+    <!-- WebApplication Schema -->
+    <script type="application/ld+json">
+{
+    "@context": "https://schema.org",
+    "@type": "WebApplication",
+    "name": "Portfolio API",
+    "description": "Full-stack web developer portfolio backend API with authentication, project management, and AI features",
+    "url": "https://mgzon-server.hf.space",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "All",
+    "softwareVersion": "1.0.0",
+    "author": {
+        "@type": "Person",
+        "@id": "https://mgzon-server.hf.space/#person"
+    },
+    "creator": {
+        "@type": "Person",
+        "name": "Ibrahim Al-Asfar"
+    },
+    "provider": {
+        "@type": "Organization",
+        "name": "MGZon",
+        "url": "https://mgzon.com",
+        "logo": "https://mgzon-server.hf.space/images/mgzon-logo.png"
+    },
+    "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "USD"
+    },
+    "featureList": [
+        "JWT Authentication",
+        "OAuth Integration (Google, Facebook, GitHub, MGZon)",
+        "Project Management",
+        "File Upload with Cloudinary",
+        "AI Chatbot",
+        "PDF/DOCX Resume Export",
+        "Real-time Analytics"
+    ]
+}
+</script>
+
+    <!-- Organization Schema -->
+    <script type="application/ld+json">
+{
+    "@context": "https://schema.org",
+    "@type": "Organization",
+    "name": "MGZon",
+    "url": "https://mgzon.com",
+    "logo": "https://mgzon-server.hf.space/images/mgzon-logo.png",
+    "sameAs": [
+        "https://github.com/MGZon",
+        "https://twitter.com/MGZon"
+    ]
+}
+</script>
+
 </head>
 
 <body class="bg-gradient-to-br from-gray-50 to-gray-100 min-h-screen">
 
     <!-- Navigation -->
-    <nav class="bg-white shadow-lg sticky top-0 z-50">
+    <nav class="bg-white/90 backdrop-blur-md shadow-lg sticky top-0 z-50">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div class="flex justify-between items-center h-16">
+            <div class="flex flex-wrap justify-between items-center py-2 md:py-0 md:h-16">
                 <div class="flex items-center space-x-3">
-                    <!-- Logo Image -->
-                    <img src="images/logo.png" alt="Logo" class="logo-img"
-                        onerror="this.onerror=null; this.parentElement.innerHTML='<div class=\'gradient-bg rounded-lg p-2\'><i class=\'fas fa-code text-white text-xl\'></i></div>'">
-                    <h1
-                        class="text-xl font-bold bg-gradient-to-r from-purple-600 to-blue-600 bg-clip-text text-transparent">
-                        Portfolio API
-                    </h1>
+                    <img src="/images/logo.png" alt="Logo" class="logo-img">
+                    <h1 class="text-lg md:text-xl font-bold gradient-text">Portfolio API</h1>
                 </div>
-                <div class="flex items-center space-x-4">
-                    <a href="/api-docs" target="_blank" class="text-gray-600 hover:text-purple-600 transition"
-                        title="API Documentation">
-                        <i class="fas fa-book text-lg"></i>
+                <div class="flex items-center space-x-3 mt-2 md:mt-0">
+                    <a href="/api-docs" class="text-gray-600 hover:text-purple-600 transition p-2">
+                        <i class="fas fa-book text-base md:text-lg"></i>
                     </a>
-                    <a href="https://github.com/Mark-Lasfar" target="_blank"
-                        class="text-gray-600 hover:text-purple-600 transition" title="GitHub">
-                        <i class="fab fa-github text-lg"></i>
+                    <a href="https://github.com/Mark-Lasfar" class="text-gray-600 hover:text-purple-600 transition p-2">
+                        <i class="fab fa-github text-base md:text-lg"></i>
                     </a>
-                    <a href="https://linkedin.com/in/ibrahim-elasfar" target="_blank"
-                        class="text-gray-600 hover:text-purple-600 transition" title="LinkedIn">
-                        <i class="fab fa-linkedin text-lg"></i>
+                    <a href="https://linkedin.com/in/ibrahim-elasfar"
+                        class="text-gray-600 hover:text-purple-600 transition p-2">
+                        <i class="fab fa-linkedin text-base md:text-lg"></i>
                     </a>
                 </div>
             </div>
@@ -420,10 +760,9 @@
             <div class="text-center animate-fadeInUp">
                 <div class="inline-flex items-center justify-center p-2 bg-green-100 rounded-full mb-4">
                     <i class="fas fa-check-circle text-green-600 mr-2"></i>
-                    <span class="text-green-600 text-sm font-medium">API is running</span>
+                    <span class="text-green-600 text-sm font-medium" id="api-status">API is running</span>
                 </div>
-                <h1
-                    class="text-5xl md:text-6xl font-bold bg-gradient-to-r from-purple-600 via-blue-600 to-purple-600 bg-clip-text text-transparent mb-6">
+                <h1 class="text-5xl md:text-6xl font-bold gradient-text mb-6">
                     Welcome to My Portfolio API
                 </h1>
                 <p class="text-xl text-gray-600 mb-8 max-w-2xl mx-auto">
@@ -432,14 +771,15 @@
                 </p>
                 <div class="flex flex-wrap justify-center gap-4">
                     <a href="/api-docs"
-                        class="gradient-bg text-white px-8 py-3 rounded-lg font-semibold hover:shadow-lg transition-all inline-flex items-center">
+                        class="gradient-bg text-white px-8 py-3 rounded-lg font-semibold btn-hover inline-flex items-center">
                         <i class="fas fa-rocket mr-2"></i>
                         Explore API
                     </a>
-                    <a href="https://github.com/Mark-Lasfar" target="_blank"
-                        class="bg-gray-800 text-white px-8 py-3 rounded-lg font-semibold hover:bg-gray-900 transition-all inline-flex items-center">
-                        <i class="fab fa-github mr-2"></i>
-                        GitHub
+                    <a href="#test-api"
+                        class="bg-gray-800 text-white px-8 py-3 rounded-lg font-semibold btn-hover inline-flex items-center"
+                        id="test-api-btn">
+                        <i class="fas fa-vial mr-2"></i>
+                        Test API
                     </a>
                 </div>
             </div>
@@ -456,7 +796,7 @@
                 <h3 class="text-2xl font-bold text-gray-800 mb-2">Database Status</h3>
                 <div class="flex items-center">
                     <div class="w-3 h-3 bg-green-500 rounded-full animate-pulse mr-2"></div>
-                    <p class="text-gray-600" id="db-status">MongoDB Connected</p>
+                    <p class="text-gray-600" id="db-status">Checking...</p>
                 </div>
             </div>
 
@@ -465,7 +805,7 @@
                     <i class="fas fa-cloud-upload-alt text-white text-xl"></i>
                 </div>
                 <h3 class="text-2xl font-bold text-gray-800 mb-2">Cloudinary</h3>
-                <p class="text-gray-600" id="cloudinary-status">Media Storage Active</p>
+                <p class="text-gray-600" id="cloudinary-status">Checking...</p>
             </div>
 
             <div class="bg-white rounded-xl shadow-lg p-6 card-hover animate-fadeInUp" style="animation-delay: 0.3s">
@@ -473,67 +813,176 @@
                     <i class="fas fa-chart-line text-white text-xl"></i>
                 </div>
                 <h3 class="text-2xl font-bold text-gray-800 mb-2">Analytics</h3>
-                <p class="text-gray-600" id="sentry-status">Sentry Monitoring Active</p>
+                <p class="text-gray-600" id="sentry-status">Checking...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- OAuth Authentication Section -->
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
+        <h2 class="text-3xl font-bold text-center text-gray-800 mb-12">🔐 Authentication Providers</h2>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            <!-- Google OAuth -->
+            <a href="/auth/google" class="bg-white rounded-xl shadow-lg p-6 card-hover text-center group"
+                target="_blank">
+                <div class="w-16 h-16 mx-auto mb-4">
+                    <i class="fab fa-google text-5xl text-red-500 group-hover:scale-110 transition-transform"></i>
+                </div>
+                <h3 class="font-semibold text-gray-800">Sign in with Google</h3>
+                <p class="text-xs text-gray-500 mt-2">OAuth 2.0</p>
+                <span
+                    class="inline-block mt-3 text-purple-600 text-sm opacity-0 group-hover:opacity-100 transition">Click
+                    to test →</span>
+            </a>
+
+            <!-- Facebook OAuth -->
+            <a href="/auth/facebook" class="bg-white rounded-xl shadow-lg p-6 card-hover text-center group"
+                target="_blank">
+                <div class="w-16 h-16 mx-auto mb-4">
+                    <i class="fab fa-facebook text-5xl text-blue-600 group-hover:scale-110 transition-transform"></i>
+                </div>
+                <h3 class="font-semibold text-gray-800">Sign in with Facebook</h3>
+                <p class="text-xs text-gray-500 mt-2">OAuth 2.0</p>
+                <span
+                    class="inline-block mt-3 text-purple-600 text-sm opacity-0 group-hover:opacity-100 transition">Click
+                    to test →</span>
+            </a>
+
+            <!-- GitHub OAuth -->
+            <a href="/auth/github" class="bg-white rounded-xl shadow-lg p-6 card-hover text-center group"
+                target="_blank">
+                <div class="w-16 h-16 mx-auto mb-4">
+                    <i class="fab fa-github text-5xl text-gray-800 group-hover:scale-110 transition-transform"></i>
+                </div>
+                <h3 class="font-semibold text-gray-800">Sign in with GitHub</h3>
+                <p class="text-xs text-gray-500 mt-2">OAuth 2.0</p>
+                <span
+                    class="inline-block mt-3 text-purple-600 text-sm opacity-0 group-hover:opacity-100 transition">Click
+                    to test →</span>
+            </a>
+
+            <!-- MGZon OAuth -->
+            <a href="/auth/mgz" class="bg-white rounded-xl shadow-lg p-6 card-hover text-center group" target="_blank">
+                <div class="w-16 h-16 mx-auto mb-4">
+                    <img src="https://mgzon-server.hf.space/images/logo.png" alt="MGZon"
+                        class="w-16 h-16 rounded-full mx-auto group-hover:scale-110 transition-transform"
+                        onerror="this.onerror=null; this.parentElement.innerHTML='<div class=\'w-16 h-16 gradient-bg rounded-full flex items-center justify-center mx-auto group-hover:scale-110 transition-transform\'><i class=\'fas fa-globe text-white text-2xl\'></i></div>'">
+                </div>
+                <h3 class="font-semibold text-gray-800">Sign in with MGZon</h3>
+                <p class="text-xs text-gray-500 mt-2">OAuth 2.0</p>
+                <span
+                    class="inline-block mt-3 text-purple-600 text-sm opacity-0 group-hover:opacity-100 transition">Click
+                    to test →</span>
+            </a>
+        </div>
+    </div>
+
+    <!-- API Test Section -->
+    <div id="test-api" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
+        <h2 class="text-3xl font-bold text-center text-gray-800 mb-12">🧪 API Test Panel</h2>
+        <div class="bg-white rounded-xl shadow-lg p-6">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Endpoint</label>
+                    <select id="api-endpoint"
+                        class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent">
+                        <option value="/api/health">GET /api/health</option>
+                        <option value="/api/projects">GET /api/projects</option>
+                        <option value="/api/skills">GET /api/skills</option>
+                        <option value="/api/register">POST /api/register</option>
+                        <option value="/api/login">POST /api/login</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Request Body (JSON)</label>
+                    <textarea id="api-body" rows="3"
+                        class="w-full px-4 py-2 border border-gray-300 rounded-lg font-mono text-sm"
+                        placeholder='{"email": "test@example.com", "password": "12345678"}'></textarea>
+                </div>
+            </div>
+            <div class="mt-4 flex justify-center">
+                <button id="send-request" class="gradient-bg text-white px-8 py-2 rounded-lg font-semibold btn-hover">
+                    <i class="fas fa-paper-plane mr-2"></i>
+                    Send Request
+                </button>
+            </div>
+            <div class="mt-6">
+                <label class="block text-sm font-medium text-gray-700 mb-2">Response</label>
+                <pre id="api-response"
+                    class="bg-gray-900 text-green-400 p-4 rounded-lg overflow-x-auto font-mono text-sm max-h-96">Click "Send Request" to test API...</pre>
             </div>
         </div>
     </div>
 
     <!-- API Endpoints Section -->
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
-        <h2 class="text-3xl font-bold text-center text-gray-800 mb-12">API Endpoints</h2>
+        <h2 class="text-3xl font-bold text-center text-gray-800 mb-12">📡 API Endpoints</h2>
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            <div class="bg-white rounded-lg shadow-md p-5 hover:shadow-lg transition">
+            <div class="bg-white rounded-lg shadow-md p-5 card-hover">
                 <div class="flex items-center justify-between mb-3">
                     <span class="bg-green-100 text-green-600 text-xs font-semibold px-2 py-1 rounded">GET</span>
                     <i class="fas fa-users text-gray-400"></i>
                 </div>
                 <code class="text-sm text-gray-700">/api/projects</code>
                 <p class="text-gray-500 text-sm mt-2">Get all public projects</p>
+                <button onclick="testEndpoint('/api/projects')"
+                    class="mt-3 text-purple-600 text-sm hover:underline">Test →</button>
             </div>
 
-            <div class="bg-white rounded-lg shadow-md p-5 hover:shadow-lg transition">
+            <div class="bg-white rounded-lg shadow-md p-5 card-hover">
                 <div class="flex items-center justify-between mb-3">
                     <span class="bg-green-100 text-green-600 text-xs font-semibold px-2 py-1 rounded">GET</span>
                     <i class="fas fa-chart-simple text-gray-400"></i>
                 </div>
                 <code class="text-sm text-gray-700">/api/skills</code>
                 <p class="text-gray-500 text-sm mt-2">Get all skills</p>
+                <button onclick="testEndpoint('/api/skills')" class="mt-3 text-purple-600 text-sm hover:underline">Test
+                    →</button>
             </div>
 
-            <div class="bg-white rounded-lg shadow-md p-5 hover:shadow-lg transition">
+            <div class="bg-white rounded-lg shadow-md p-5 card-hover">
                 <div class="flex items-center justify-between mb-3">
                     <span class="bg-green-100 text-green-600 text-xs font-semibold px-2 py-1 rounded">GET</span>
                     <i class="fas fa-heart text-gray-400"></i>
                 </div>
                 <code class="text-sm text-gray-700">/api/health</code>
                 <p class="text-gray-500 text-sm mt-2">Check system health</p>
+                <button onclick="testEndpoint('/api/health')" class="mt-3 text-purple-600 text-sm hover:underline">Test
+                    →</button>
             </div>
 
-            <div class="bg-white rounded-lg shadow-md p-5 hover:shadow-lg transition">
+            <div class="bg-white rounded-lg shadow-md p-5 card-hover">
                 <div class="flex items-center justify-between mb-3">
                     <span class="bg-blue-100 text-blue-600 text-xs font-semibold px-2 py-1 rounded">POST</span>
                     <i class="fas fa-user-plus text-gray-400"></i>
                 </div>
                 <code class="text-sm text-gray-700">/api/register</code>
                 <p class="text-gray-500 text-sm mt-2">Create new account</p>
+                <button
+                    onclick="testEndpoint('/api/register', 'POST', {email: 'test@example.com', password: '12345678', username: 'testuser'})"
+                    class="mt-3 text-purple-600 text-sm hover:underline">Test →</button>
             </div>
 
-            <div class="bg-white rounded-lg shadow-md p-5 hover:shadow-lg transition">
+            <div class="bg-white rounded-lg shadow-md p-5 card-hover">
                 <div class="flex items-center justify-between mb-3">
                     <span class="bg-blue-100 text-blue-600 text-xs font-semibold px-2 py-1 rounded">POST</span>
                     <i class="fas fa-sign-in-alt text-gray-400"></i>
                 </div>
                 <code class="text-sm text-gray-700">/api/login</code>
                 <p class="text-gray-500 text-sm mt-2">Authenticate user</p>
+                <button onclick="testEndpoint('/api/login', 'POST', {email: 'admin@elasfar.com', password: 'admin123'})"
+                    class="mt-3 text-purple-600 text-sm hover:underline">Test →</button>
             </div>
 
-            <div class="bg-white rounded-lg shadow-md p-5 hover:shadow-lg transition">
+            <div class="bg-white rounded-lg shadow-md p-5 card-hover">
                 <div class="flex items-center justify-between mb-3">
-                    <span class="bg-purple-100 text-purple-600 text-xs font-semibold px-2 py-1 rounded">AUTH</span>
+                    <span class="bg-purple-100 text-purple-600 text-xs font-semibold px-2 py-1 rounded">GET</span>
                     <i class="fab fa-google text-gray-400"></i>
                 </div>
                 <code class="text-sm text-gray-700">/auth/google</code>
-                <p class="text-gray-500 text-sm mt-2">Google OAuth</p>
+                <p class="text-gray-500 text-sm mt-2">Google OAuth Login</p>
+                <a href="/auth/google" target="_blank"
+                    class="mt-3 text-purple-600 text-sm hover:underline inline-block">Open →</a>
             </div>
         </div>
     </div>
@@ -541,7 +990,7 @@
     <!-- Tech Stack Section -->
     <div class="bg-white py-16">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <h2 class="text-3xl font-bold text-center text-gray-800 mb-12">Technology Stack</h2>
+            <h2 class="text-3xl font-bold text-center text-gray-800 mb-12">⚡ Technology Stack</h2>
             <div class="flex flex-wrap justify-center gap-8">
                 <div class="text-center">
                     <i class="fab fa-node-js text-5xl text-green-600"></i>
@@ -559,7 +1008,6 @@
                     <i class="fas fa-project-diagram text-5xl text-pink-500"></i>
                     <p class="mt-2 text-gray-600">GraphQL</p>
                 </div>
-
                 <div class="text-center">
                     <i class="fab fa-docker text-5xl text-blue-600"></i>
                     <p class="mt-2 text-gray-600">Docker</p>
@@ -568,22 +1016,96 @@
                     <i class="fab fa-aws text-5xl text-orange-500"></i>
                     <p class="mt-2 text-gray-600">AWS</p>
                 </div>
+                <div class="text-center">
+                    <i class="fas fa-shield-alt text-5xl text-purple-600"></i>
+                    <p class="mt-2 text-gray-600">JWT Auth</p>
+                </div>
+                <div class="text-center">
+                    <i class="fas fa-cloud-upload-alt text-5xl text-blue-400"></i>
+                    <p class="mt-2 text-gray-600">Cloudinary</p>
+                </div>
             </div>
         </div>
     </div>
 
     <!-- Footer -->
-    <footer class="bg-gray-800 text-white py-8">
+    <footer class="bg-gray-800 text-white py-8 mt-8">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
-            <p class="text-gray-400">&copy; 2026 Ibrahim Al-Asfar. All rights reserved.</p>
-            <p class="text-gray-500 text-sm mt-2">Built with ❤️ using Node.js, Express, MongoDB & TailwindCSS</p>
-            <p class="text-gray-600 text-xs mt-4">
+            <p class="text-gray-400 text-sm">&copy; 2026 Ibrahim Al-Asfar. All rights reserved.</p>
+            <p class="text-gray-500 text-xs mt-2">Built with ❤️ using Node.js, Express, MongoDB & TailwindCSS</p>
+            <p class="text-gray-600 text-xs mt-3">
                 <i class="fas fa-code mr-1"></i> API Version 1.0.0
             </p>
+
+            <!-- ✅ روابط قانونية -->
+            <div class="flex flex-wrap justify-center gap-3 mt-4">
+                <a href="/privacy" class="text-gray-500 hover:text-purple-400 text-xs transition">Privacy Policy</a>
+                <span class="text-gray-600 text-xs">•</span>
+                <a href="/terms" class="text-gray-500 hover:text-purple-400 text-xs transition">Terms of Service</a>
+                <span class="text-gray-600 text-xs">•</span>
+                <a href="/sitemap.xml" class="text-gray-500 hover:text-purple-400 text-xs transition">Sitemap</a>
+                <span class="text-gray-600 text-xs">•</span>
+                <a href="/api-docs" class="text-gray-500 hover:text-purple-400 text-xs transition">API Docs</a>
+            </div>
+
+            <!-- ✅ روابط Social Media -->
+            <div class="flex justify-center gap-4 mt-4">
+                <a href="https://github.com/Mark-Lasfar" target="_blank"
+                    class="text-gray-500 hover:text-white transition">
+                    <i class="fab fa-github text-lg"></i>
+                </a>
+                <a href="https://linkedin.com/in/ibrahim-elasfar" target="_blank"
+                    class="text-gray-500 hover:text-white transition">
+                    <i class="fab fa-linkedin text-lg"></i>
+                </a>
+                <a href="https://twitter.com/MarkLasfar" target="_blank"
+                    class="text-gray-500 hover:text-white transition">
+                    <i class="fab fa-twitter text-lg"></i>
+                </a>
+            </div>
         </div>
     </footer>
 
+    <!-- Toast Container -->
+    <div id="toast-container" class="fixed bottom-4 right-4 z-50"></div>
+
     <script>
+        // Show toast notification
+        function showToast(message, type = 'success') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            toast.className = `toast ${type} mb-2`;
+            toast.innerHTML = `
+                <div class="flex items-center gap-3">
+                    <i class="fas ${type === 'success' ? 'fa-check-circle text-green-500' : type === 'error' ? 'fa-exclamation-circle text-red-500' : 'fa-info-circle text-blue-500'}"></i>
+                    <span>${message}</span>
+                </div>
+            `;
+            container.appendChild(toast);
+            setTimeout(() => toast.remove(), 3000);
+        }
+
+        // Test API endpoint
+        async function testEndpoint(url, method = 'GET', body = null) {
+            const responseDiv = document.getElementById('api-response');
+            responseDiv.textContent = 'Loading...';
+
+            try {
+                const options = { method, headers: { 'Content-Type': 'application/json' } };
+                if (body && method !== 'GET') {
+                    options.body = JSON.stringify(body);
+                }
+
+                const response = await fetch(url, options);
+                const data = await response.json();
+                responseDiv.textContent = JSON.stringify(data, null, 2);
+                showToast(`✅ ${url} - Status: ${response.status}`, 'success');
+            } catch (error) {
+                responseDiv.textContent = `Error: ${error.message}`;
+                showToast(`❌ ${url} - ${error.message}`, 'error');
+            }
+        }
+
         // Fetch real-time data
         async function fetchStats() {
             try {
@@ -591,25 +1113,42 @@
                 const data = await response.json();
                 console.log('System Health:', data);
 
-                // Update statuses based on real data
-                if (data.mongodb === 'connected') {
-                    document.getElementById('db-status').innerHTML = 'MongoDB Connected ✅';
-                    document.getElementById('db-status').className = 'text-green-600';
-                }
-                if (data.cloudinary === 'configured') {
-                    document.getElementById('cloudinary-status').innerHTML = 'Cloudinary Active ✅';
-                    document.getElementById('cloudinary-status').className = 'text-green-600';
-                }
-                if (data.sentry === 'configured') {
-                    document.getElementById('sentry-status').innerHTML = 'Sentry Active ✅';
-                    document.getElementById('sentry-status').className = 'text-green-600';
-                }
+                document.getElementById('db-status').innerHTML = data.mongodb === 'connected' ? 'MongoDB Connected ✅' : 'MongoDB Error ❌';
+                document.getElementById('db-status').className = data.mongodb === 'connected' ? 'text-green-600' : 'text-red-600';
+
+                document.getElementById('cloudinary-status').innerHTML = data.cloudinary === 'configured' ? 'Cloudinary Active ✅' : 'Cloudinary Not Configured ⚠️';
+                document.getElementById('cloudinary-status').className = data.cloudinary === 'configured' ? 'text-green-600' : 'text-yellow-600';
+
+                document.getElementById('sentry-status').innerHTML = data.sentry === 'configured' ? 'Sentry Active ✅' : 'Sentry Not Configured ⚠️';
+                document.getElementById('sentry-status').className = data.sentry === 'configured' ? 'text-green-600' : 'text-yellow-600';
             } catch (error) {
                 console.error('Error fetching stats:', error);
                 document.getElementById('db-status').innerHTML = 'Connection Error ❌';
                 document.getElementById('db-status').className = 'text-red-600';
+                showToast('Failed to fetch system health', 'error');
             }
         }
+
+        // API Test Panel
+        document.getElementById('send-request')?.addEventListener('click', async () => {
+            const endpoint = document.getElementById('api-endpoint').value;
+            const bodyText = document.getElementById('api-body').value;
+            let body = null;
+
+            if (bodyText && (endpoint.includes('/register') || endpoint.includes('/login'))) {
+                try {
+                    body = JSON.parse(bodyText);
+                } catch (e) {
+                    showToast('Invalid JSON format', 'error');
+                    return;
+                }
+            }
+
+            const method = endpoint.includes('/register') || endpoint.includes('/login') ? 'POST' : 'GET';
+            await testEndpoint(endpoint, method, body);
+        });
+
+        // Load stats on page load
         fetchStats();
 
         // Refresh stats every 30 seconds
@@ -622,14 +1161,10 @@
             document.documentElement.classList.remove('dark');
         }
 
-        // Add smooth scroll behavior
-        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
-            anchor.addEventListener('click', function (e) {
-                e.preventDefault();
-                document.querySelector(this.getAttribute('href')).scrollIntoView({
-                    behavior: 'smooth'
-                });
-            });
+        // Scroll to test section
+        document.getElementById('test-api-btn')?.addEventListener('click', (e) => {
+            e.preventDefault();
+            document.getElementById('test-api').scrollIntoView({ behavior: 'smooth' });
         });
 
         // Add page load animation
@@ -640,6 +1175,11 @@
                 document.body.style.opacity = '1';
             }, 100);
         });
+
+        // Show welcome toast
+        setTimeout(() => {
+            showToast('Welcome to Portfolio API! 🚀', 'info');
+        }, 1000);
     </script>
 </body>
 

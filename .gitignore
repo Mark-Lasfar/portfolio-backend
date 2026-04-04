@@ -15,7 +15,6 @@ logs/
 *.log
 
 # Build outputs
-dist/
 build/
 
 # Temporary files
@@ -25,3 +24,5 @@ build/
 # Cloudinary uploads
 uploads/
 tmp/
+backend/server/
+server/

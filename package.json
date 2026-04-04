@@ -72,5 +72,8 @@
     "validator": "^13.12.0",
     "web-push": "^3.6.7",
     "winston": "^3.19.0"
+  },
+  "devDependencies": {
+    "javascript-obfuscator": "^5.4.1"
   }
 }

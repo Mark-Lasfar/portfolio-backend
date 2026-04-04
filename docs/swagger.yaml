@@ -4,7 +4,7 @@ info:
   version: 1.0.0
   description: API for Ibrahim Al-Asfar's portfolio website, supporting user authentication, project management, profile handling, and more.
 servers:
-  - url: https://portfolio-backend-beta-two.vercel.app
+  - url: https://mgzon-server.hf.space/
     description: Production server
   - url: http://localhost:3000
     description: Local development server

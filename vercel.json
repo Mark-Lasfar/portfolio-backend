@@ -3,11 +3,14 @@
   "builds": [
     {
       "src": "server.js",
-      "use": "@vercel/node"
-    },
-    {
-      "src": "public/**",
-      "use": "@vercel/static"
+      "use": "@vercel/node",
+      "config": {
+        "includeFiles": [
+          "views/**",
+          "public/**",
+          "docs/**"
+        ]
+      }
     }
   ],
   "routes": [
@@ -20,12 +23,29 @@
       "dest": "server.js"
     },
     {
+      "src": "/api-docs/(.*)",
+      "dest": "server.js"
+    },
+    {
       "src": "/",
       "dest": "server.js"
     },
     {
+      "src": "/(.*\\.(ejs|html|css|js|png|jpg|jpeg|gif|svg|ico|json|yaml|yml))$",
+      "dest": "/public/$1"
+    },
+    {
       "src": "/(.*)",
-      "dest": "public/$1"
+      "dest": "server.js"
     }
-  ]
+  ],
+  "env": {
+    "NODE_ENV": "production"
+  },
+  "functions": {
+    "server.js": {
+      "memory": 1024,
+      "maxDuration": 10
+    }
+  }
 }
